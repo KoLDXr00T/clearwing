@@ -16,6 +16,15 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from clearwing.llm.native import AsyncLLMClient
+from clearwing.providers import (
+    ENV_ANTHROPIC_KEY,
+    ENV_API_KEY,
+    ENV_BASE_URL,
+    ProviderManager,
+    resolve_llm_endpoint,
+)
+
 from .disclosure import (
     DisclosureGenerator,
 )
@@ -169,13 +178,16 @@ class SourceHuntRunner:
         logger.info("Preprocessor enumerated %d files", files_ranked)
 
         # 2. Rank — unless depth=quick AND no LLM available
-        ranker_llm = self._get_llm("ranker", self.ranker_llm)
+        ranker_llm = self._get_native_client("ranker", self.ranker_llm)
         if ranker_llm is not None and files:
+            logger.info("Ranker starting on %d files", len(files))
             try:
                 Ranker(ranker_llm, RankerConfig()).rank(files)
+                logger.info("Ranker completed")
             except Exception:
                 logger.warning("Ranker failed", exc_info=True)
         else:
+            logger.info("Ranker skipped; no LLM available")
             # Fallback: assign reasonable defaults so tier assignment still works
             for ft in files:
                 ft["surface"] = ft.get("surface") or 3
@@ -242,10 +254,11 @@ class SourceHuntRunner:
                     semgrep_hints_by_file.setdefault(key, []).extend(mechanism_hints)
 
         # 3. Tiered hunt
-        hunter_llm = self._get_llm("hunter", self.hunter_llm)
+        hunter_llm = self._get_native_client("hunter", self.hunter_llm)
         all_findings: list[Finding] = []
         files_hunted = 0
         if hunter_llm is not None and files:
+            logger.info("HunterPool starting on %d files", len(files))
             pool = HunterPool(
                 HuntPoolConfig(
                     files=files,
@@ -263,6 +276,7 @@ class SourceHuntRunner:
             )
             try:
                 all_findings = pool.run()
+                logger.info("HunterPool completed with %d findings", len(all_findings))
             except Exception:
                 logger.warning("HunterPool run failed", exc_info=True)
             spent_per_tier = pool.spent_per_tier
@@ -274,6 +288,7 @@ class SourceHuntRunner:
                 ]
             )
         else:
+            logger.info("HunterPool skipped; no LLM available")
             spent_per_tier = {"A": 0.0, "B": 0.0, "C": 0.0}
 
         # Promote static findings into the all_findings list so depth=quick
@@ -800,18 +815,15 @@ class SourceHuntRunner:
              direct via ANTHROPIC_API_KEY.
           5. None — caller falls back to a no-LLM path
         """
-        import os
-
-        from clearwing.providers import (
-            ENV_ANTHROPIC_KEY,
-            ENV_API_KEY,
-            ENV_BASE_URL,
-            ProviderManager,
-            resolve_llm_endpoint,
-        )
-
         if override is not None:
             return override
+
+        # Inject-via-constructor wins (sourcehunt CLI command + tests)
+        if self.provider_manager is not None:
+            try:
+                return self.provider_manager.get_llm(task)
+            except Exception:
+                logger.debug("Injected ProviderManager failed for task=%s", task, exc_info=True)
 
         # Preflight: does *any* credential / endpoint exist? If not,
         # skip the LLM entirely so we don't throw a noisy stack trace
@@ -824,12 +836,34 @@ class SourceHuntRunner:
             logger.debug("No API key / endpoint in environment; skipping LLM for task=%s", task)
             return None
 
-        # Inject-via-constructor wins (sourcehunt CLI command + tests)
+    def _get_native_client(self, task: str, override: Any) -> AsyncLLMClient | None:
+        """Return a native async LLM client for sourcehunt tasks."""
+        if override is not None:
+            return override
+
         if self.provider_manager is not None:
             try:
-                return self.provider_manager.get_llm(task)
+                return self.provider_manager.get_native_client(task)
             except Exception:
-                logger.debug("Injected ProviderManager failed for task=%s", task, exc_info=True)
+                logger.debug("Injected ProviderManager native client failed for task=%s", task, exc_info=True)
+
+        has_creds = any(
+            os.environ.get(name)
+            for name in (ENV_BASE_URL, ENV_API_KEY, ENV_ANTHROPIC_KEY, "OPENAI_API_KEY")
+        )
+        if not has_creds:
+            logger.debug("No API key / endpoint in environment; skipping native client for task=%s", task)
+            return None
+
+        if self.model_override:
+            return self._build_native_from_model_string(self.model_override)
+
+        try:
+            endpoint = resolve_llm_endpoint()
+            return ProviderManager.for_endpoint(endpoint).get_native_client(task)
+        except Exception:
+            logger.debug("Default endpoint native resolution failed", exc_info=True)
+            return None
 
         # --model override (single model string, routed through the
         # same endpoint resolution as --base-url)
@@ -852,12 +886,18 @@ class SourceHuntRunner:
         lands on OpenRouter, not on Anthropic direct.
         """
         try:
-            from clearwing.providers import ProviderManager, resolve_llm_endpoint
-
             endpoint = resolve_llm_endpoint(cli_model=model)
             return ProviderManager.for_endpoint(endpoint).get_llm("default")
         except Exception:
             logger.warning("Failed to build LLM from model string", exc_info=True)
+            return None
+
+    def _build_native_from_model_string(self, model: str) -> AsyncLLMClient | None:
+        try:
+            endpoint = resolve_llm_endpoint(cli_model=model)
+            return ProviderManager.for_endpoint(endpoint).get_native_client("default")
+        except Exception:
+            logger.warning("Failed to build native client from model string", exc_info=True)
             return None
 
     # --- Reporting ----------------------------------------------------------

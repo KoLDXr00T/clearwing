@@ -29,7 +29,7 @@ class SessionInfo:
     os_info: str | None = None
     kali_container_id: str | None = None
     custom_tool_names: list[str] = field(default_factory=list)
-    langgraph_thread_id: str = ""
+    thread_id: str = ""
 
 
 class _DateTimeEncoder(json.JSONEncoder):
@@ -72,7 +72,7 @@ class SessionStore:
             model=model,
             status="running",
             start_time=datetime.now(tz=timezone.utc),
-            langgraph_thread_id=uuid.uuid4().hex,
+            thread_id=uuid.uuid4().hex,
         )
         self.save(session)
         return session
@@ -93,6 +93,8 @@ class SessionStore:
             raise FileNotFoundError(f"Session file not found: {path}")
         raw = json.loads(path.read_text(encoding="utf-8"))
         raw = _datetime_decoder(raw)
+        if "thread_id" not in raw and "langgraph_thread_id" in raw:
+            raw["thread_id"] = raw.pop("langgraph_thread_id")
         return SessionInfo(**raw)
 
     def list_sessions(self, target: str | None = None) -> list[SessionInfo]:
@@ -102,6 +104,8 @@ class SessionStore:
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 raw = _datetime_decoder(raw)
+                if "thread_id" not in raw and "langgraph_thread_id" in raw:
+                    raw["thread_id"] = raw.pop("langgraph_thread_id")
                 session = SessionInfo(**raw)
                 if target is None or session.target == target:
                     sessions.append(session)

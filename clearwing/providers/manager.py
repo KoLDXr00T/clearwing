@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from dataclasses import dataclass
 from typing import Any
 
-from langchain_core.language_models import BaseChatModel
+from clearwing.llm import AsyncLLMClient, ChatModel
 
 from .env import LLMEndpoint, resolve_llm_endpoint
+from .genai_pyo3_chat import GenAIPyO3ChatModel
 
 logger = logging.getLogger(__name__)
 
@@ -35,22 +37,18 @@ class ModelRoute:
 
 PROVIDER_PRESETS = {
     "anthropic": {
-        "class": "langchain_anthropic.ChatAnthropic",
         "env_key": "ANTHROPIC_API_KEY",
         "models": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
     },
     "openai": {
-        "class": "langchain_openai.ChatOpenAI",
         "env_key": "OPENAI_API_KEY",
         "models": ["gpt-4o", "gpt-4o-mini", "o1-preview"],
     },
     "google": {
-        "class": "langchain_google_genai.ChatGoogleGenerativeAI",
         "env_key": "GOOGLE_API_KEY",
         "models": ["gemini-2.0-flash", "gemini-2.5-pro"],
     },
     "ollama": {
-        "class": "langchain_ollama.ChatOllama",
         "env_key": "",
         "models": [],  # dynamic
         "default_base_url": "http://localhost:11434",
@@ -143,14 +141,17 @@ class ProviderManager:
         configs: list[ProviderConfig] | None = None,
         routes: list[ModelRoute] | None = None,
         endpoint: LLMEndpoint | None = None,
+        task_model_overrides: dict[str, str] | None = None,
     ):
         self._configs: dict[str, ProviderConfig] = {}
         self._routes: dict[str, ModelRoute] = {}
-        self._llm_cache: dict[str, BaseChatModel] = {}
+        self._llm_cache: dict[str, ChatModel] = {}
+        self._native_cache: dict[str, AsyncLLMClient] = {}
         # When `endpoint` is set, every get_llm() call returns the
         # same ChatOpenAI (or ChatAnthropic) instance regardless of
         # task. This is the "one endpoint for everything" mode.
         self._global_endpoint: LLMEndpoint | None = endpoint
+        self._task_model_overrides: dict[str, str] = dict(task_model_overrides or {})
 
         if configs:
             for c in configs:
@@ -173,7 +174,10 @@ class ProviderManager:
         verifier / sourcehunt_exploit / default) dispatches against
         that same endpoint.
         """
-        return cls(endpoint=endpoint)
+        return cls(
+            endpoint=endpoint,
+            task_model_overrides=_default_task_model_overrides(endpoint),
+        )
 
     @classmethod
     def from_config(cls, cfg: dict[str, Any]) -> ProviderManager:
@@ -256,13 +260,14 @@ class ProviderManager:
 
     # --- Get an LLM for a task --------------------------------------------
 
-    def get_llm(self, task: str = "default") -> BaseChatModel:
+    def get_llm(self, task: str = "default") -> ChatModel:
         """Get the appropriate LLM for a task type."""
         # Single-endpoint mode: every task gets the same LLM
         if self._global_endpoint is not None:
-            cache_key = f"_global_:{self._global_endpoint.model}"
+            endpoint = self._endpoint_for_task(task)
+            cache_key = f"_global_:{task}:{endpoint.model}"
             if cache_key not in self._llm_cache:
-                self._llm_cache[cache_key] = self._create_llm_from_endpoint(self._global_endpoint)
+                self._llm_cache[cache_key] = self._create_llm_from_endpoint(endpoint)
             return self._llm_cache[cache_key]
 
         route = self._routes.get(task, self._routes.get("default"))
@@ -275,82 +280,155 @@ class ProviderManager:
 
         return self._llm_cache[cache_key]
 
-    def _create_llm_from_endpoint(self, endpoint: LLMEndpoint) -> BaseChatModel:
-        """Build a BaseChatModel from a resolved LLMEndpoint."""
-        if endpoint.is_openai_compat:
-            from langchain_openai import ChatOpenAI
+    def get_native_client(self, task: str = "default") -> AsyncLLMClient:
+        """Get the native async LLM client for a task type."""
+        if self._global_endpoint is not None:
+            endpoint = self._endpoint_for_task(task)
+            cache_key = f"_global_native_:{task}:{endpoint.model}"
+            if cache_key not in self._native_cache:
+                self._native_cache[cache_key] = self._create_native_from_endpoint(endpoint)
+            return self._native_cache[cache_key]
 
-            kwargs: dict[str, Any] = {
-                "model": endpoint.model,
-                "base_url": endpoint.base_url,
-            }
-            if endpoint.api_key:
-                kwargs["api_key"] = endpoint.api_key
-            return ChatOpenAI(**kwargs)
+        route = self._routes.get(task, self._routes.get("default"))
+        if not route:
+            raise ValueError(f"No route configured for task: {task}")
+
+        cache_key = f"{route.provider}:{route.model}:native"
+        if cache_key not in self._native_cache:
+            self._native_cache[cache_key] = self._create_native(route.provider, route.model)
+        return self._native_cache[cache_key]
+
+    def _create_llm_from_endpoint(self, endpoint: LLMEndpoint) -> ChatModel:
+        """Build a native ChatModel from a resolved LLMEndpoint."""
+        if endpoint.is_openai_compat:
+            return GenAIPyO3ChatModel(
+                model_name=endpoint.model,
+                base_url=endpoint.base_url,
+                api_key=endpoint.api_key or "",
+                provider_name=_adapter_for_endpoint(endpoint),
+            )
 
         # Anthropic direct (the default fallback path)
-        from langchain_anthropic import ChatAnthropic
+        return GenAIPyO3ChatModel(
+            model_name=endpoint.model,
+            api_key=endpoint.api_key or "",
+            provider_name=_adapter_for_endpoint(endpoint),
+        )
 
-        kwargs = {"model": endpoint.model}
-        if endpoint.api_key:
-            kwargs["api_key"] = endpoint.api_key
-        return ChatAnthropic(**kwargs)
+    def _create_native_from_endpoint(self, endpoint: LLMEndpoint) -> AsyncLLMClient:
+        return AsyncLLMClient(
+            model_name=endpoint.model,
+            base_url=endpoint.base_url,
+            api_key=endpoint.api_key or "",
+            provider_name=_adapter_for_endpoint(endpoint),
+        )
 
-    def _create_llm(self, provider: str, model: str) -> BaseChatModel:
-        """Create an LLM instance for a given provider and model."""
+    def _endpoint_for_task(self, task: str) -> LLMEndpoint:
+        endpoint = self._global_endpoint
+        if endpoint is None:
+            raise ValueError("_endpoint_for_task requires a global endpoint")
+        override_model = self._task_model_overrides.get(task)
+        if override_model and override_model != endpoint.model:
+            return replace(endpoint, model=override_model)
+        return endpoint
+
+    def _create_llm(self, provider: str, model: str) -> ChatModel:
+        """Create a native chat model for a given provider and model."""
         config = self._configs.get(provider)
         preset = PROVIDER_PRESETS.get(provider)
 
         if provider == "anthropic":
-            from langchain_anthropic import ChatAnthropic
-
-            kwargs = {"model": model}
-            if config and config.api_key:
-                kwargs["api_key"] = config.api_key
-            if config and config.max_tokens:
-                kwargs["max_tokens"] = config.max_tokens
-            return ChatAnthropic(**kwargs)
+            return GenAIPyO3ChatModel(
+                model_name=model,
+                api_key=config.api_key if config else "",
+                provider_name="anthropic",
+            )
 
         elif provider == "openai":
-            try:
-                from langchain_openai import ChatOpenAI
-            except ImportError as e:
-                raise ImportError("Install langchain-openai: pip install langchain-openai") from e
-            kwargs = {"model": model}
-            if config and config.api_key:
-                kwargs["api_key"] = config.api_key
-            if config and config.base_url:
-                kwargs["base_url"] = config.base_url
-            return ChatOpenAI(**kwargs)
+            return GenAIPyO3ChatModel(
+                model_name=model,
+                base_url=config.base_url if config else None,
+                api_key=config.api_key if config else "",
+                provider_name=_adapter_for_provider_config(provider, config),
+            )
 
         elif provider == "google":
-            try:
-                from langchain_google_genai import ChatGoogleGenerativeAI
-            except ImportError as e:
-                raise ImportError(
-                    "Install langchain-google-genai: pip install langchain-google-genai"
-                ) from e
-            kwargs = {"model": model}
-            if config and config.api_key:
-                kwargs["google_api_key"] = config.api_key
-            return ChatGoogleGenerativeAI(**kwargs)
+            return GenAIPyO3ChatModel(
+                model_name=model,
+                api_key=config.api_key if config else "",
+                provider_name="gemini",
+            )
 
         elif provider == "ollama":
-            try:
-                from langchain_ollama import ChatOllama
-            except ImportError as e:
-                raise ImportError("Install langchain-ollama: pip install langchain-ollama") from e
-            kwargs = {"model": model}
             base_url = (
                 config.base_url
                 if config and config.base_url
                 else preset.get("default_base_url", "http://localhost:11434")
             )
-            kwargs["base_url"] = base_url
-            return ChatOllama(**kwargs)
+            return GenAIPyO3ChatModel(
+                model_name=model,
+                base_url=base_url,
+                api_key=config.api_key if config else "",
+                provider_name="ollama",
+            )
 
         else:
+            if config and config.base_url:
+                return GenAIPyO3ChatModel(
+                    model_name=model,
+                    base_url=config.base_url,
+                    api_key=config.api_key,
+                    provider_name=_adapter_for_provider_config(provider, config),
+                )
             raise ValueError(f"Unknown provider: {provider}")
+
+    def _create_native(self, provider: str, model: str) -> AsyncLLMClient:
+        config = self._configs.get(provider)
+        preset = PROVIDER_PRESETS.get(provider)
+
+        if provider == "anthropic":
+            return AsyncLLMClient(
+                model_name=model,
+                api_key=config.api_key if config else "",
+                provider_name="anthropic",
+            )
+
+        if provider == "openai":
+            return AsyncLLMClient(
+                model_name=model,
+                base_url=config.base_url if config else None,
+                api_key=config.api_key if config else "",
+                provider_name=_adapter_for_provider_config(provider, config),
+            )
+
+        if provider == "google":
+            return AsyncLLMClient(
+                model_name=model,
+                api_key=config.api_key if config else "",
+                provider_name="gemini",
+            )
+
+        if provider == "ollama":
+            base_url = (
+                config.base_url
+                if config and config.base_url
+                else preset.get("default_base_url", "http://localhost:11434")
+            )
+            return AsyncLLMClient(
+                model_name=model,
+                base_url=base_url,
+                api_key=config.api_key if config else "",
+                provider_name="ollama",
+            )
+
+        if config and config.base_url:
+            return AsyncLLMClient(
+                model_name=model,
+                base_url=config.base_url,
+                api_key=config.api_key,
+                provider_name=_adapter_for_provider_config(provider, config),
+            )
+        raise ValueError(f"Unknown provider: {provider}")
 
     def list_providers(self) -> list[str]:
         """List all configured provider names."""
@@ -396,3 +474,44 @@ def _expand_env(value: Any) -> str:
     if s.startswith("${") and s.endswith("}"):
         return os.environ.get(s[2:-1], "")
     return s
+
+
+def _adapter_for_endpoint(endpoint: LLMEndpoint) -> str:
+    if endpoint.provider == "anthropic":
+        return "anthropic"
+    return _adapter_for_base_url(endpoint.base_url, endpoint.model)
+
+
+def _adapter_for_provider_config(provider: str, config: ProviderConfig | None) -> str:
+    explicit = provider.lower().strip()
+    if explicit == "anthropic":
+        return "anthropic"
+    if explicit == "google":
+        return "gemini"
+    if explicit == "ollama":
+        return "ollama"
+    if explicit == "openai":
+        return _adapter_for_base_url(config.base_url if config else None, config.model if config else "")
+    return _adapter_for_base_url(config.base_url if config else None, config.model if config else "")
+
+
+def _adapter_for_base_url(base_url: str | None, model: str) -> str:
+    host = (base_url or "").lower()
+    if "localhost:8183" in host or "127.0.0.1:8183" in host:
+        return "openai_resp"
+    if "11434" in host:
+        return "ollama"
+    if "generativelanguage.googleapis.com" in host or "googleapis.com" in host:
+        return "gemini"
+    if "anthropic.com" in host:
+        return "anthropic"
+    if model.startswith("gemini-"):
+        return "gemini"
+    return "openai"
+
+
+def _default_task_model_overrides(endpoint: LLMEndpoint) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    if endpoint.provider == "openai_compat" and endpoint.model == "gpt-5.4":
+        overrides["ranker"] = "gpt-5.4-mini"
+    return overrides

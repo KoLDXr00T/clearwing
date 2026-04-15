@@ -9,7 +9,7 @@ the missing piece:
 - No LLM credentials?                  → run `clearwing setup`
 - Docker daemon not running?           → `colima start` / Docker Desktop
 - `ripgrep` not on PATH?               → brew install ripgrep
-- `langchain-openai` out of date?      → pip install -U clearwing
+- `genai-pyo3` missing or broken?      → uv pip install -e .
 - `~/.clearwing/` not writable?        → fix permissions
 - Can't reach the configured endpoint? → network / wrong base_url
 
@@ -472,16 +472,10 @@ def _check_optional_extras() -> DoctorSection:
     extras = [
         # (module_name, extras_key, one_line_purpose)
         (
-            "langchain_openai",
+            "genai_pyo3",
             None,
-            "OpenAI-compat backend — needed for OpenRouter/Ollama/LM Studio (runtime dep, should always be present)",
+            "Native LLM transport — required runtime dependency",
         ),
-        (
-            "langchain_ollama",
-            "ollama",
-            "Native Ollama transport (OpenAI-compat endpoint at :11434/v1 works without this)",
-        ),
-        ("langchain_google_genai", "google", "Google Gemini support"),
         (
             "playwright",
             "browser",
@@ -512,9 +506,9 @@ def _check_optional_extras() -> DoctorSection:
             hint = (
                 f"pip install 'clearwing[{extras_key}]'" if extras_key else "pip install clearwing"
             )
-            # Missing langchain_openai is an error (it's a runtime dep);
+            # Missing genai_pyo3 is an error (it's a runtime dep);
             # everything else is a warning (they're optional extras).
-            status = STATUS_ERR if module == "langchain_openai" else STATUS_WARN
+            status = STATUS_ERR if module == "genai_pyo3" else STATUS_WARN
             section.add(
                 DoctorCheck(
                     module.replace("_", "-"),

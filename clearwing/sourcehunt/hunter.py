@@ -1,28 +1,26 @@
-"""Per-file hunter ReAct agent.
+"""Per-file hunter runtime for sourcehunt.
 
-build_hunter_agent() wraps build_react_graph() (R1) with the sourcehunt-specific
-tool set, system prompt, and SourceHuntState schema. v0.1 ships with a single
-GeneralHunter; v0.2 adds memory_safety and logic_auth specialists with
-different prompts but the same graph structure.
+This module now uses a native async tool-calling loop backed by genai-pyo3,
+not LangChain/LangGraph. The prompts and tool set are unchanged; the
+execution model is simpler: assistant response -> tool calls -> tool results ->
+next assistant response, repeated until the model stops calling tools or the
+step budget is exhausted.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import time
+from dataclasses import dataclass
 from typing import Any
 
-from langchain_core.language_models import BaseChatModel
-from langgraph.graph.state import CompiledStateGraph
-
-from clearwing.agent.graph import build_react_graph
-from clearwing.agent.tools.hunt import (
-    HunterContext,
-    build_hunter_tools,
-    build_propagation_auditor_tools,
-)
+from clearwing.agent.tools.hunt import HunterContext, build_hunter_tools, build_propagation_auditor_tools
+from clearwing.llm import AsyncLLMClient, NativeMessage, NativeToolCall, NativeToolSpec
+from clearwing.observability.telemetry import CostTracker
 from clearwing.sandbox.container import SandboxContainer
 
-from .state import FileTarget, SourceHuntState
+from .state import FileTarget, Finding
 
 logger = logging.getLogger(__name__)
 
@@ -405,12 +403,6 @@ def _choose_specialist(file_target: FileTarget) -> str:
 # --- Hunter system prompt builder -------------------------------------------
 
 
-def _no_op_state_updater(tool_name: str, data: Any, state: dict) -> dict:
-    """Hunter agents update SourceHuntState via record_finding directly,
-    so no implicit tool-result→state mapping is needed."""
-    return {}
-
-
 WEB_FRAMEWORK_HUNTER_PROMPT = """You are a WEB FRAMEWORK specialist hunting for vulnerabilities in a single web-application source file from the project {project_name}. Your specialty is the class of bugs that exist ONLY in the context of an HTTP request/response framework — request parsing, routing, session handling, template rendering, database access.
 
 File: {file_path}
@@ -539,11 +531,133 @@ def _build_propagation_prompt(file_target: FileTarget) -> str:
 # --- Public factory ----------------------------------------------------------
 
 
+@dataclass
+class NativeHunter:
+    llm: AsyncLLMClient
+    prompt: str
+    tools: list[NativeToolSpec]
+    ctx: HunterContext
+    max_steps: int = 20
+
+    async def arun(self) -> tuple[list[Finding], float, int]:
+        messages: list[NativeMessage] = [
+            NativeMessage(
+                role="user",
+                content=f"Hunt for vulnerabilities in {self.ctx.file_path or 'unknown'}.",
+            )
+        ]
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_cost_usd = 0.0
+        repeated_tool_calls: dict[tuple[str, str], int] = {}
+        tools_by_name = {tool.name: tool for tool in self.tools}
+
+        for step in range(1, self.max_steps + 1):
+            response = await self.llm.achat(
+                messages=messages,
+                system=self.prompt,
+                tools=self.tools,
+            )
+            total_input_tokens += response.usage.input_tokens
+            total_output_tokens += response.usage.output_tokens
+            total_cost_usd += _estimate_cost_usd(
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+                self.llm.model_name,
+            )
+
+            if response.tool_calls:
+                messages.append(
+                    NativeMessage(
+                        role="assistant",
+                        content=response.text,
+                        tool_calls=response.tool_calls,
+                    )
+                )
+                for tool_call in response.tool_calls:
+                    key = (tool_call.name, tool_call.arguments_json)
+                    repeated_tool_calls[key] = repeated_tool_calls.get(key, 0) + 1
+                    if repeated_tool_calls[key] > 3:
+                        tool_output = {
+                            "error": (
+                                "tool call skipped because the assistant repeated the same "
+                                "call too many times"
+                            )
+                        }
+                    else:
+                        tool_output = await self._run_tool(tools_by_name, tool_call)
+                    messages.append(
+                        NativeMessage(
+                            role="tool",
+                            content=_tool_output_text(tool_output),
+                            tool_response_call_id=tool_call.id,
+                        )
+                    )
+                continue
+
+            if response.text:
+                messages.append(NativeMessage(role="assistant", content=response.text))
+            logger.info(
+                "Hunter finished for %s after %d steps findings=%d",
+                self.ctx.file_path,
+                step,
+                len(self.ctx.findings),
+            )
+            return list(self.ctx.findings), total_cost_usd, total_input_tokens + total_output_tokens
+
+        logger.warning(
+            "Hunter hit max steps for %s findings=%d",
+            self.ctx.file_path,
+            len(self.ctx.findings),
+        )
+        return list(self.ctx.findings), total_cost_usd, total_input_tokens + total_output_tokens
+
+    async def _run_tool(
+        self,
+        tools_by_name: dict[str, NativeToolSpec],
+        tool_call: NativeToolCall,
+    ) -> Any:
+        tool = tools_by_name.get(tool_call.name)
+        if tool is None:
+            return {"error": f"unknown tool: {tool_call.name}"}
+        started = time.monotonic()
+        try:
+            return await tool.ainvoke(tool_call.arguments)
+        except Exception as exc:
+            logger.warning(
+                "Hunter tool %s failed for %s: %s",
+                tool_call.name,
+                self.ctx.file_path,
+                exc,
+            )
+            return {"error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            try:
+                CostTracker().record_tool_call(tool_call.name, duration_ms)
+            except Exception:
+                logger.debug("Tool usage recording failed", exc_info=True)
+
+
+def _tool_output_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, indent=2, sort_keys=True)
+    except Exception:
+        return str(value)
+
+
+def _estimate_cost_usd(input_tokens: int, output_tokens: int, model: str) -> float:
+    pricing = CostTracker.PRICING.get(model, CostTracker.PRICING[CostTracker._DEFAULT_MODEL])
+    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+
+
 def build_hunter_agent(
     file_target: FileTarget,
     repo_path: str,
     sandbox: SandboxContainer | None,
-    llm: BaseChatModel,
+    llm: AsyncLLMClient,
     session_id: str,
     project_name: str = "target",
     specialist: str | None = None,
@@ -552,8 +666,8 @@ def build_hunter_agent(
     variant_seed: dict | None = None,
     sandbox_manager: Any = None,  # v0.4: HunterSandbox manager for variants
     default_sanitizers: tuple = ("asan", "ubsan"),  # v0.4: primary sanitizer combo
-) -> tuple[CompiledStateGraph, HunterContext]:
-    """Build a per-file ReAct hunter agent.
+) -> tuple[NativeHunter, HunterContext]:
+    """Build a per-file native hunter runtime.
 
     Args:
         file_target: The FileTarget to scope the hunter to.
@@ -561,7 +675,7 @@ def build_hunter_agent(
         sandbox: SandboxContainer for compile/run tools. May be None for tests
                  (the tools fall back to host file I/O for read/grep, and
                  return errors for compile/run).
-        llm: Pre-bound LLM (.bind_tools should NOT be called yet — we do it).
+        llm: Native async LLM client.
         session_id: Audit session id.
         project_name: Project name for the prompt header.
         specialist: Override the auto-selected specialist. v0.1 always uses
@@ -571,7 +685,7 @@ def build_hunter_agent(
         variant_seed: v0.3 — variant hunter loop seed.
 
     Returns:
-        (compiled_graph, hunter_context). The caller owns the context and
+        (native_hunter, hunter_context). The caller owns the context and
         reads ctx.findings after the run completes.
     """
     # Decide which prompt + tool set to use
@@ -607,28 +721,4 @@ def build_hunter_agent(
             specialist=specialist,
         )
 
-    # Bind tools to the LLM
-    llm_with_tools = llm.bind_tools(tools)
-
-    def system_prompt_fn(state: dict) -> str:
-        # The prompt is fixed per-hunter (the file is the context). We don't
-        # need to re-render from state — return the captured prompt string.
-        return prompt
-
-    graph = build_react_graph(
-        llm_with_tools=llm_with_tools,
-        tools=tools,
-        system_prompt_fn=system_prompt_fn,
-        state_schema=SourceHuntState,
-        model_name="hunter",
-        session_id=session_id,
-        state_updater_fn=_no_op_state_updater,
-        # Disable network-pentest knowledge graph and input-guardrail tool list
-        knowledge_graph_populator_fn=lambda *a, **k: {},
-        input_guardrail_tool_names=frozenset(),
-        output_guardrail_tool_names=frozenset(),
-        enable_knowledge_graph=False,
-        enable_episodic_memory=False,
-    )
-
-    return graph, ctx
+    return NativeHunter(llm=llm, prompt=prompt, tools=tools, ctx=ctx), ctx

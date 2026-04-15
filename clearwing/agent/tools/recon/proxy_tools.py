@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from langchain_core.tools import tool
+from clearwing.agent.tooling import tool
 
 
 @dataclass

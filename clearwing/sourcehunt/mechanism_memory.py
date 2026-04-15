@@ -34,8 +34,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from clearwing.llm import AsyncLLMClient, NativeMessage
 
 from .state import Finding
 
@@ -138,7 +137,7 @@ Return ONLY the JSON object."""
 class MechanismExtractor:
     """Extracts abstract mechanisms from verified findings via an LLM pass."""
 
-    def __init__(self, llm: BaseChatModel):
+    def __init__(self, llm: AsyncLLMClient):
         self.llm = llm
 
     def extract(
@@ -149,18 +148,15 @@ class MechanismExtractor:
         """Extract a Mechanism from one verified finding. Returns None on failure."""
         user_msg = self._build_user_message(finding)
         try:
-            response = self.llm.invoke(
-                [
-                    SystemMessage(content=MECHANISM_EXTRACTION_PROMPT),
-                    HumanMessage(content=user_msg),
-                ]
+            response = self.llm.chat(
+                messages=[NativeMessage(role="user", content=user_msg)],
+                system=MECHANISM_EXTRACTION_PROMPT,
             )
         except Exception:
             logger.debug("Mechanism extraction LLM call failed", exc_info=True)
             return None
 
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        parsed = self._parse_response(content)
+        parsed = self._parse_response(response.text)
         if not parsed:
             return None
 

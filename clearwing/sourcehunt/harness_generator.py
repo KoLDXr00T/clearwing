@@ -31,8 +31,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
 
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from clearwing.llm import AsyncLLMClient, NativeMessage
 
 from clearwing.sandbox.hunter_sandbox import HunterSandbox
 
@@ -117,7 +116,7 @@ class HarnessGenerator:
 
     def __init__(
         self,
-        llm: BaseChatModel,
+        llm: AsyncLLMClient,
         sandbox_factory: Any = None,  # Callable[[], SandboxContainer] | HunterSandbox
         config: HarnessGeneratorConfig | None = None,
     ) -> None:
@@ -316,17 +315,14 @@ class HarnessGenerator:
             f"File source (may be truncated):\n\n{file_source}\n"
         )
         try:
-            response = self.llm.invoke(
-                [
-                    SystemMessage(content=HARNESS_GEN_SYSTEM_PROMPT),
-                    HumanMessage(content=user_msg),
-                ]
+            response = self.llm.chat(
+                messages=[NativeMessage(role="user", content=user_msg)],
+                system=HARNESS_GEN_SYSTEM_PROMPT,
             )
         except Exception:
             logger.debug("Harness-gen LLM call failed", exc_info=True)
             return None
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        return _strip_markdown_fences(content)
+        return _strip_markdown_fences(response.text)
 
 
 # --- Helpers ----------------------------------------------------------------

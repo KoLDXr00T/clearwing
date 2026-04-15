@@ -13,14 +13,14 @@ defaults to 3 in v0.1 — v0.2's tree-sitter callgraph fills it in for real.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from clearwing.llm import AsyncLLMClient, extract_json_array
 
 from .state import FileTarget
 
@@ -58,6 +58,8 @@ Return ONLY a JSON array, no other text:
 @dataclass
 class RankerConfig:
     chunk_size: int = 150  # files per LLM call
+    llm_timeout_seconds: int | None = None
+    large_repo_file_threshold: int = 2000
     include_static_hints: bool = True
     include_imports_by: bool = True
     static_hint_surface_floor: int = 3  # files with static_hint > 0 → min surface 3
@@ -93,19 +95,41 @@ class Ranker:
 
     def __init__(
         self,
-        llm: BaseChatModel,
+        llm: AsyncLLMClient,
         config: RankerConfig | None = None,
     ):
         self.llm = llm
         self.config = config or RankerConfig()
 
     def rank(self, files: list[FileTarget]) -> list[FileTarget]:
+        return asyncio.run(self.arank(files))
+
+    async def arank(self, files: list[FileTarget]) -> list[FileTarget]:
         if not files:
             return files
 
+        # Seed the whole corpus with cheap heuristic scores first so large
+        # repositories can skip an all-files LLM pass and still produce
+        # actionable tiers quickly.
+        self._apply_heuristic_baseline(files)
+
+        if len(files) > self.config.large_repo_file_threshold:
+            logger.info(
+                "Large repo detected for ranker; heuristics applied to %d files, "
+                "LLM reranking all %d files",
+                len(files),
+                len(files),
+            )
+
         chunks = self._chunk(files, self.config.chunk_size)
-        for chunk in chunks:
-            scores = self._rank_chunk(chunk)
+        total_chunks = len(chunks)
+        scores_by_chunk = await asyncio.gather(
+            *[
+                self._rank_chunk(chunk, idx=idx, total_chunks=total_chunks)
+                for idx, chunk in enumerate(chunks, start=1)
+            ]
+        )
+        for chunk, scores in zip(chunks, scores_by_chunk, strict=False):
             self._apply_scores(chunk, scores)
 
         # Apply floors and compute priority for every file
@@ -120,6 +144,15 @@ class Ranker:
 
         return files
 
+    def _apply_heuristic_baseline(self, files: list[FileTarget]) -> None:
+        """Populate cheap baseline scores before any LLM reranking."""
+        for ft in files:
+            ft["surface"] = self._fallback_surface(ft)
+            ft["influence"] = self._fallback_influence(ft)
+            self._apply_floors(ft)
+            ft["priority"] = self._compute_priority(ft)
+            self._apply_fuzzable_boost(ft)
+
     # --- Chunking -----------------------------------------------------------
 
     @staticmethod
@@ -128,22 +161,47 @@ class Ranker:
 
     # --- LLM call -----------------------------------------------------------
 
-    def _rank_chunk(self, chunk: list[FileTarget]) -> dict[str, dict[str, Any]]:
+    async def _rank_chunk(
+        self,
+        chunk: list[FileTarget],
+        *,
+        idx: int,
+        total_chunks: int,
+    ) -> dict[str, dict[str, Any]]:
         """Return {path: {surface, influence, surface_rationale, influence_rationale}}."""
         user_msg = self._build_user_message(chunk)
         try:
-            response = self.llm.invoke(
-                [
-                    SystemMessage(content=RANKER_SYSTEM_PROMPT),
-                    HumanMessage(content=user_msg),
-                ]
+            logger.info(
+                "Ranker chunk %d/%d starting (%d files)",
+                idx,
+                total_chunks,
+                len(chunk),
             )
+            if self.config.llm_timeout_seconds and self.config.llm_timeout_seconds > 0:
+                response = await asyncio.wait_for(
+                    self.llm.aask_text(
+                        system=RANKER_SYSTEM_PROMPT,
+                        user=user_msg,
+                    ),
+                    timeout=self.config.llm_timeout_seconds,
+                )
+            else:
+                response = await self.llm.aask_text(
+                    system=RANKER_SYSTEM_PROMPT,
+                    user=user_msg,
+                )
+        except TimeoutError:
+            logger.warning(
+                "Ranker LLM call timed out after %ss for %d files; falling back to heuristics",
+                self.config.llm_timeout_seconds,
+                len(chunk),
+            )
+            return {}
         except Exception:
             logger.warning("Ranker LLM call failed", exc_info=True)
             return {}
-
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        return self._parse_response(content)
+        logger.info("Ranker chunk %d/%d completed", idx, total_chunks)
+        return self._parse_response(response.text)
 
     def _build_user_message(self, chunk: list[FileTarget]) -> str:
         """Build the user message — a JSON list of files with cheap static hints."""
@@ -175,19 +233,12 @@ class Ranker:
 
     def _parse_response(self, content: str) -> dict[str, dict[str, Any]]:
         """Extract the JSON array from the model response, robustly."""
-        # Try to find the first JSON array in the content
-        match = re.search(r"\[\s*\{.*\}\s*\]", content, re.DOTALL)
-        if not match:
+        try:
+            parsed = extract_json_array(content)
+        except Exception:
             logger.warning("Ranker response had no JSON array; got: %s", content[:300])
             return {}
-        try:
-            parsed = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            logger.warning("Ranker JSON parse failed; got: %s", match.group(0)[:300])
-            return {}
         out: dict[str, dict[str, Any]] = {}
-        if not isinstance(parsed, list):
-            return out
         for entry in parsed:
             if not isinstance(entry, dict):
                 continue

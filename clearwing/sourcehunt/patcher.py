@@ -24,8 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from clearwing.llm import AsyncLLMClient, NativeMessage
 
 from .state import EVIDENCE_LEVELS, EvidenceLevel, Finding, evidence_at_or_above
 
@@ -84,7 +83,7 @@ class AutoPatcher:
     PATCH_GATE: EvidenceLevel = "root_cause_explained"
     _ELIGIBLE_SEVERITIES = {"critical", "high"}
 
-    def __init__(self, llm: BaseChatModel):
+    def __init__(self, llm: AsyncLLMClient):
         self.llm = llm
 
     def is_eligible(self, finding: Finding) -> bool:
@@ -131,11 +130,9 @@ class AutoPatcher:
         # 1. Ask the LLM for a patch
         user_msg = self._build_user_message(finding, file_content)
         try:
-            response = self.llm.invoke(
-                [
-                    SystemMessage(content=PATCHER_SYSTEM_PROMPT),
-                    HumanMessage(content=user_msg),
-                ]
+            response = self.llm.chat(
+                messages=[NativeMessage(role="user", content=user_msg)],
+                system=PATCHER_SYSTEM_PROMPT,
             )
         except Exception as e:
             logger.warning("Patcher LLM call failed", exc_info=True)
@@ -150,8 +147,7 @@ class AutoPatcher:
                 notes=f"llm error: {e}",
             )
 
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        parsed = self._parse_response(content)
+        parsed = self._parse_response(response.text)
         if not parsed:
             return PatchAttempt(
                 finding_id=finding.get("id", "unknown"),
@@ -162,7 +158,7 @@ class AutoPatcher:
                 explanation="",
                 confidence="low",
                 notes="no JSON in patcher response",
-                raw_response=content,
+                raw_response=response.text,
             )
 
         diff = parsed.get("diff", "")
@@ -196,7 +192,7 @@ class AutoPatcher:
             explanation=explanation,
             confidence=confidence,
             notes=notes,
-            raw_response=content,
+            raw_response=response.text,
         )
 
     def _build_user_message(self, finding: Finding, file_content: str) -> str:

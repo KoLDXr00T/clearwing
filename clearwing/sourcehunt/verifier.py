@@ -21,8 +21,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, cast
 
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from clearwing.llm import AsyncLLMClient, NativeMessage
 
 from .state import EVIDENCE_LEVELS, EvidenceLevel, Finding, evidence_at_or_above
 
@@ -153,7 +152,7 @@ class Verifier:
 
     def __init__(
         self,
-        llm: BaseChatModel,
+        llm: AsyncLLMClient,
         adversarial: bool = False,
         adversarial_threshold: EvidenceLevel | None = "static_corroboration",
     ):
@@ -205,11 +204,9 @@ class Verifier:
         user_msg = self._build_user_message(finding, file_content)
         system_prompt = self._prompt_for_finding(finding)
         try:
-            response = self.llm.invoke(
-                [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=user_msg),
-                ]
+            response = self.llm.chat(
+                messages=[NativeMessage(role="user", content=user_msg)],
+                system=system_prompt,
             )
         except Exception as e:
             logger.warning("Verifier LLM call failed", exc_info=True)
@@ -224,8 +221,7 @@ class Verifier:
                 duplicate_cve=None,
             )
 
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        return self._parse_response(finding, content)
+        return self._parse_response(finding, response.text)
 
     def _build_user_message(self, finding: Finding, file_content: str) -> str:
         # Note: we deliberately do NOT include the hunter's reasoning chain
@@ -327,18 +323,15 @@ class Verifier:
         """
         user_msg = self._build_patch_oracle_message(finding, file_content)
         try:
-            response = self.llm.invoke(
-                [
-                    SystemMessage(content=PATCH_ORACLE_PROMPT),
-                    HumanMessage(content=user_msg),
-                ]
+            response = self.llm.chat(
+                messages=[NativeMessage(role="user", content=user_msg)],
+                system=PATCH_ORACLE_PROMPT,
             )
         except Exception as e:
             logger.debug("Patch-oracle LLM call failed", exc_info=True)
             return False, "", f"llm error: {e}"
 
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        parsed = self._parse_patch_oracle_response(content)
+        parsed = self._parse_patch_oracle_response(response.text)
         if not parsed:
             return False, "", "patch oracle: could not parse response"
 

@@ -16,7 +16,7 @@ import logging
 import os
 import re
 
-from langchain_core.tools import tool
+from clearwing.llm import NativeToolSpec
 
 from .sandbox import HunterContext
 
@@ -124,7 +124,6 @@ def build_discovery_tools(ctx: HunterContext) -> list:
     so the aggregate registry is byte-identical.
     """
 
-    @tool
     def read_source_file(path: str, start_line: int = 1, end_line: int = -1) -> str:
         """Read a source file (path is repo-relative) and return up to 500 lines.
 
@@ -157,7 +156,6 @@ def build_discovery_tools(ctx: HunterContext) -> list:
             footer = ""
         return "".join(sliced) + footer
 
-    @tool
     def list_source_tree(dir_path: str = ".", max_depth: int = 2) -> list[str]:
         """List files and directories relative to the repo root.
 
@@ -187,7 +185,6 @@ def build_discovery_tools(ctx: HunterContext) -> list:
                 return out
         return out
 
-    @tool
     def grep_source(pattern: str, path: str = ".", file_glob: str = "") -> list[dict]:
         """ripgrep-style search for a pattern. Returns up to 100 matches.
 
@@ -214,7 +211,6 @@ def build_discovery_tools(ctx: HunterContext) -> list:
             # Fallback: use Python re on the host file tree (slower but works in tests)
             return _grep_python_fallback(ctx.repo_path, rel, pattern, file_glob)
 
-    @tool
     def find_callers(symbol: str) -> list[dict]:
         """Find files/lines that reference a symbol. Wraps grep_source.
 
@@ -223,7 +219,60 @@ def build_discovery_tools(ctx: HunterContext) -> list:
         """
         # Word-boundary-ish search on the symbol
         pattern = rf"\b{re.escape(symbol)}\b"
-        matches: list[dict] = grep_source.invoke({"pattern": pattern, "path": "."})
+        matches: list[dict] = grep_source(pattern=pattern, path=".")
         return matches
 
-    return [read_source_file, list_source_tree, grep_source, find_callers]
+    return [
+        NativeToolSpec(
+            name="read_source_file",
+            description="Read a repo-relative source file and return up to 500 lines.",
+            schema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "start_line": {"type": "integer", "default": 1},
+                    "end_line": {"type": "integer", "default": -1},
+                },
+                "required": ["path"],
+            },
+            handler=read_source_file,
+        ),
+        NativeToolSpec(
+            name="list_source_tree",
+            description="List files and directories relative to the repo root.",
+            schema={
+                "type": "object",
+                "properties": {
+                    "dir_path": {"type": "string", "default": "."},
+                    "max_depth": {"type": "integer", "default": 2},
+                },
+            },
+            handler=list_source_tree,
+        ),
+        NativeToolSpec(
+            name="grep_source",
+            description="Search the repo with a ripgrep-style regex and return up to 100 matches.",
+            schema={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "path": {"type": "string", "default": "."},
+                    "file_glob": {"type": "string", "default": ""},
+                },
+                "required": ["pattern"],
+            },
+            handler=grep_source,
+        ),
+        NativeToolSpec(
+            name="find_callers",
+            description="Find files and lines that reference a symbol.",
+            schema={
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string"},
+                },
+                "required": ["symbol"],
+            },
+            handler=find_callers,
+        ),
+    ]

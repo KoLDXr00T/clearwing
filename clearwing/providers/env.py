@@ -54,7 +54,7 @@ class LLMEndpoint:
 
     Fields:
         provider: "anthropic" | "openai_compat" | "ollama" — decides
-                  which langchain class handles the actual call.
+                  which native transport configuration handles the actual call.
         model:    The model identifier as the provider expects it
                   (e.g. "claude-sonnet-4-6", "anthropic/claude-opus-4"
                   for OpenRouter, "llama3:70b" for Ollama, "gpt-4o"
@@ -89,7 +89,7 @@ class LLMEndpoint:
 
     @property
     def is_anthropic_direct(self) -> bool:
-        """True if this endpoint uses `langchain-anthropic` directly."""
+        """True if this endpoint talks to Anthropic directly."""
         return self.provider == "anthropic" and self.base_url is None
 
     def describe(self) -> str:

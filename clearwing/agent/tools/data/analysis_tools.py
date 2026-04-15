@@ -1,6 +1,6 @@
 """Agent tools for white-box source code analysis."""
 
-from langchain_core.tools import tool
+from clearwing.agent.tooling import tool
 
 
 @tool
