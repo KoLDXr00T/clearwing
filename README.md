@@ -36,7 +36,7 @@ authorization, and disclosure. See `SECURITY.md`.
 
 ```bash
 python3 -m venv venv && source venv/bin/activate
-pip install 'git+https://github.com/Lazarus-AI/clearwing.git@v1.0.0#egg=clearwing[all]'
+pip install clearwing[all]@'git+https://github.com/Lazarus-AI/clearwing.git@v1.0.0'
 
 # Interactive setup wizard — menu-driven provider selection,
 # credential entry, optional live test, persists to ~/.clearwing/config.yaml
