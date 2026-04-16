@@ -286,7 +286,7 @@ class ProviderManager:
             endpoint = self._endpoint_for_task(task)
             cache_key = f"_global_native_:{task}:{endpoint.model}"
             if cache_key not in self._native_cache:
-                self._native_cache[cache_key] = self._create_native_from_endpoint(endpoint)
+                self._native_cache[cache_key] = self._create_native_from_endpoint(endpoint, task)
             return self._native_cache[cache_key]
 
         route = self._routes.get(task, self._routes.get("default"))
@@ -295,7 +295,7 @@ class ProviderManager:
 
         cache_key = f"{route.provider}:{route.model}:native"
         if cache_key not in self._native_cache:
-            self._native_cache[cache_key] = self._create_native(route.provider, route.model)
+            self._native_cache[cache_key] = self._create_native(route.provider, route.model, task)
         return self._native_cache[cache_key]
 
     def _create_llm_from_endpoint(self, endpoint: LLMEndpoint) -> ChatModel:
@@ -315,12 +315,14 @@ class ProviderManager:
             provider_name=_adapter_for_endpoint(endpoint),
         )
 
-    def _create_native_from_endpoint(self, endpoint: LLMEndpoint) -> AsyncLLMClient:
+    def _create_native_from_endpoint(self, endpoint: LLMEndpoint, task: str = "default") -> AsyncLLMClient:
+        provider_name = _adapter_for_endpoint(endpoint)
         return AsyncLLMClient(
             model_name=endpoint.model,
             base_url=endpoint.base_url,
             api_key=endpoint.api_key or "",
-            provider_name=_adapter_for_endpoint(endpoint),
+            provider_name=provider_name,
+            max_concurrency=_native_concurrency_for_task(task, provider_name),
         )
 
     def _endpoint_for_task(self, task: str) -> LLMEndpoint:
@@ -382,7 +384,7 @@ class ProviderManager:
                 )
             raise ValueError(f"Unknown provider: {provider}")
 
-    def _create_native(self, provider: str, model: str) -> AsyncLLMClient:
+    def _create_native(self, provider: str, model: str, task: str = "default") -> AsyncLLMClient:
         config = self._configs.get(provider)
         preset = PROVIDER_PRESETS.get(provider)
 
@@ -391,14 +393,17 @@ class ProviderManager:
                 model_name=model,
                 api_key=config.api_key if config else "",
                 provider_name="anthropic",
+                max_concurrency=_native_concurrency_for_task(task, "anthropic"),
             )
 
         if provider == "openai":
+            provider_name = _adapter_for_provider_config(provider, config)
             return AsyncLLMClient(
                 model_name=model,
                 base_url=config.base_url if config else None,
                 api_key=config.api_key if config else "",
-                provider_name=_adapter_for_provider_config(provider, config),
+                provider_name=provider_name,
+                max_concurrency=_native_concurrency_for_task(task, provider_name),
             )
 
         if provider == "google":
@@ -406,6 +411,7 @@ class ProviderManager:
                 model_name=model,
                 api_key=config.api_key if config else "",
                 provider_name="gemini",
+                max_concurrency=_native_concurrency_for_task(task, "gemini"),
             )
 
         if provider == "ollama":
@@ -419,14 +425,17 @@ class ProviderManager:
                 base_url=base_url,
                 api_key=config.api_key if config else "",
                 provider_name="ollama",
+                max_concurrency=_native_concurrency_for_task(task, "ollama"),
             )
 
         if config and config.base_url:
+            provider_name = _adapter_for_provider_config(provider, config)
             return AsyncLLMClient(
                 model_name=model,
                 base_url=config.base_url,
                 api_key=config.api_key,
-                provider_name=_adapter_for_provider_config(provider, config),
+                provider_name=provider_name,
+                max_concurrency=_native_concurrency_for_task(task, provider_name),
             )
         raise ValueError(f"Unknown provider: {provider}")
 
@@ -508,6 +517,21 @@ def _adapter_for_base_url(base_url: str | None, model: str) -> str:
     if model.startswith("gemini-"):
         return "gemini"
     return "openai"
+
+
+def _native_concurrency_for_task(task: str, provider_name: str) -> int:
+    normalized_task = task.strip().lower()
+    normalized_provider = provider_name.strip().lower()
+
+    if normalized_provider == "openai_resp":
+        if normalized_task == "ranker":
+            return 1
+        if normalized_task in {"hunter", "verifier", "sourcehunt_exploit", "default"}:
+            return 15
+
+    if normalized_task == "ranker":
+        return 4
+    return 8
 
 
 def _default_task_model_overrides(endpoint: LLMEndpoint) -> dict[str, str]:
