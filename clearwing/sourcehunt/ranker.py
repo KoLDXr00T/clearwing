@@ -16,15 +16,32 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any
 
-from clearwing.llm import AsyncLLMClient, extract_json_array
+from pydantic import BaseModel, ConfigDict, Field
+
+from clearwing.llm import AsyncLLMClient
 
 from .state import FileTarget
 
 logger = logging.getLogger(__name__)
+
+
+class RankedFileScore(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    surface: int = Field(ge=1, le=5)
+    influence: int = Field(ge=1, le=5)
+    surface_rationale: str
+    influence_rationale: str
+
+
+class RankedFileScoreResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[RankedFileScore]
 
 
 RANKER_SYSTEM_PROMPT = """You are a security researcher triaging files in a project for vulnerability hunting. For each file listed below, return TWO independent scores from 1 to 5:
@@ -45,10 +62,12 @@ RANKER_SYSTEM_PROMPT = """You are a security researcher triaging files in a proj
 
 A file can score HIGH on influence and LOW on surface. That combination is what you're looking for — bugs in boring files that propagate widely.
 
-Return ONLY a JSON array, no other text:
-[
-  {"path": "...", "surface": N, "influence": N, "surface_rationale": "one short sentence", "influence_rationale": "one short sentence"}
-]
+Return ONLY a JSON object with this shape, no other text:
+{
+  "results": [
+    {"path": "...", "surface": N, "influence": N, "surface_rationale": "one short sentence", "influence_rationale": "one short sentence"}
+  ]
+}
 """
 
 
@@ -205,17 +224,21 @@ class Ranker:
                 len(chunk),
             )
             if self.config.llm_timeout_seconds and self.config.llm_timeout_seconds > 0:
-                response = await asyncio.wait_for(
-                    self.llm.aask_text(
+                scores, response = await asyncio.wait_for(
+                    self.llm.aask_json(
                         system=RANKER_SYSTEM_PROMPT,
                         user=user_msg,
+                        schema_model=RankedFileScoreResponse,
+                        schema_name="ranked_file_score_response",
                     ),
                     timeout=self.config.llm_timeout_seconds,
                 )
             else:
-                response = await self.llm.aask_text(
+                scores, response = await self.llm.aask_json(
                     system=RANKER_SYSTEM_PROMPT,
                     user=user_msg,
+                    schema_model=RankedFileScoreResponse,
+                    schema_name="ranked_file_score_response",
                 )
         except TimeoutError:
             logger.warning(
@@ -234,7 +257,7 @@ class Ranker:
             total_chunks,
             elapsed,
         )
-        return self._parse_response(response.text)
+        return self._parse_response(scores)
 
     def _build_user_message(self, chunk: list[FileTarget]) -> str:
         """Build the user message — a JSON list of files with cheap static hints."""
@@ -264,25 +287,24 @@ class Ranker:
             f"{json.dumps(items, indent=2)}"
         )
 
-    def _parse_response(self, content: str) -> dict[str, dict[str, Any]]:
-        """Extract the JSON array from the model response, robustly."""
-        try:
-            parsed = extract_json_array(content)
-        except Exception:
-            logger.warning("Ranker response had no JSON array; got: %s", content[:300])
-            return {}
+    def _parse_response(self, parsed: Any) -> dict[str, dict[str, Any]]:
+        items = parsed.get("results", []) if isinstance(parsed, dict) else parsed
         out: dict[str, dict[str, Any]] = {}
-        for entry in parsed:
-            if not isinstance(entry, dict):
+        for entry in items:
+            if isinstance(entry, RankedFileScore):
+                item = entry.model_dump()
+            elif isinstance(entry, dict):
+                item = entry
+            else:
                 continue
-            path = entry.get("path")
+            path = item.get("path")
             if not path:
                 continue
             out[path] = {
-                "surface": int(entry.get("surface", 0)),
-                "influence": int(entry.get("influence", 0)),
-                "surface_rationale": str(entry.get("surface_rationale", "")),
-                "influence_rationale": str(entry.get("influence_rationale", "")),
+                "surface": int(item.get("surface", 0)),
+                "influence": int(item.get("influence", 0)),
+                "surface_rationale": str(item.get("surface_rationale", "")),
+                "influence_rationale": str(item.get("influence_rationale", "")),
             }
         return out
 

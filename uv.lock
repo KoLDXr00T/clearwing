@@ -498,6 +498,7 @@ dependencies = [
     { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pydantic" },
     { name = "pysmb" },
     { name = "pyyaml" },
     { name = "reportlab" },
@@ -561,7 +562,7 @@ requires-dist = [
     { name = "docker", specifier = ">=7.0.0" },
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },
-    { name = "genai-pyo3", git = "https://github.com/ropoctl/genai-pyo3?rev=9d4018ea5124b6ac13b4d993739fa0640212299b" },
+    { name = "genai-pyo3", git = "https://github.com/ropoctl/genai-pyo3?rev=a2a2f0c547b979c09a5978fe9b8546c187f04a5b" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.5.0" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.4.0" },
@@ -570,6 +571,7 @@ requires-dist = [
     { name = "networkx", specifier = ">=3.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.40.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pymetasploit3", marker = "extra == 'metasploit'", specifier = ">=1.0.0" },
     { name = "pysmb", specifier = ">=1.2.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
@@ -954,7 +956,7 @@ wheels = [
 [[package]]
 name = "genai-pyo3"
 version = "0.1.0"
-source = { git = "https://github.com/ropoctl/genai-pyo3?rev=9d4018ea5124b6ac13b4d993739fa0640212299b#9d4018ea5124b6ac13b4d993739fa0640212299b" }
+source = { git = "https://github.com/ropoctl/genai-pyo3?rev=a2a2f0c547b979c09a5978fe9b8546c187f04a5b#a2a2f0c547b979c09a5978fe9b8546c187f04a5b" }
 
 [[package]]
 name = "ghp-import"

@@ -41,6 +41,7 @@ dependencies = [
     "jinja2>=3.1.0",
     "reportlab>=4.0.0",
     "genai-pyo3",
+    "pydantic>=2.0.0",
     "docker>=7.0.0",
     # TUI
     "textual>=0.47.0",
@@ -96,7 +97,7 @@ Documentation = "https://lazarus-ai.github.io/clearwing/"
 clearwing = "clearwing:main"
 
 [tool.uv.sources]
-genai-pyo3 = { git = "https://github.com/ropoctl/genai-pyo3", rev = "9d4018ea5124b6ac13b4d993739fa0640212299b" }
+genai-pyo3 = { git = "https://github.com/ropoctl/genai-pyo3", rev = "a2a2f0c547b979c09a5978fe9b8546c187f04a5b" }
 
 [tool.setuptools.packages.find]
 include = ["clearwing*"]

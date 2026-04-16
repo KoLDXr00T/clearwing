@@ -12,10 +12,12 @@ from genai_pyo3 import (
     ChatRequest,
     ChatResponse,
     Client,
+    JsonSpec,
     Tool,
     ToolCall,
     Usage,
 )
+from pydantic import BaseModel
 
 
 def _run_coro_sync(coro):
@@ -103,6 +105,9 @@ class AsyncLLMClient:
         tools: list[NativeToolSpec] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        response_schema: type[BaseModel] | None = None,
+        response_schema_name: str | None = None,
+        response_schema_description: str | None = None,
     ) -> NativeResponse:
         request_messages: list[Any] = []
         for message in messages:
@@ -154,6 +159,15 @@ class AsyncLLMClient:
             capture_content=True,
             capture_usage=True,
             capture_tool_calls=True,
+            response_json_spec=(
+                _json_spec_from_model(
+                    response_schema,
+                    name=response_schema_name,
+                    description=response_schema_description,
+                )
+                if response_schema is not None
+                else None
+            ),
         )
 
         async with self._semaphore:
@@ -199,12 +213,18 @@ class AsyncLLMClient:
         user: str,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        response_schema: type[BaseModel] | None = None,
+        response_schema_name: str | None = None,
+        response_schema_description: str | None = None,
     ) -> NativeResponse:
         return await self.achat(
             messages=[NativeMessage(role="user", content=user)],
             system=system,
             temperature=temperature,
             max_tokens=max_tokens,
+            response_schema=response_schema,
+            response_schema_name=response_schema_name,
+            response_schema_description=response_schema_description,
         )
 
     async def aask_json(
@@ -215,13 +235,24 @@ class AsyncLLMClient:
         expect: str = "object",
         temperature: float | None = None,
         max_tokens: int | None = None,
+        schema_model: type[BaseModel] | None = None,
+        schema_name: str | None = None,
+        schema_description: str | None = None,
     ) -> tuple[Any, NativeResponse]:
         response = await self.aask_text(
             system=system,
             user=user,
             temperature=temperature,
             max_tokens=max_tokens,
+            response_schema=schema_model,
+            response_schema_name=schema_name,
+            response_schema_description=schema_description,
         )
+        if schema_model is not None:
+            parsed_model = schema_model.model_validate_json(response.text)
+            if getattr(schema_model, "__pydantic_root_model__", False):
+                return parsed_model.root, response
+            return parsed_model.model_dump(), response
         if expect == "array":
             return extract_json_array(response.text), response
         return extract_json_object(response.text), response
@@ -323,3 +354,23 @@ def _safe_json_loads(value: str) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return {}
+
+
+def _json_spec_from_model(
+    schema_model: type[BaseModel],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> JsonSpec:
+    schema = schema_model.model_json_schema()
+    return JsonSpec(
+        name=name or _schema_name_for_model(schema_model),
+        schema_json=json.dumps(schema),
+        description=description,
+    )
+
+
+def _schema_name_for_model(schema_model: type[BaseModel]) -> str:
+    raw_name = getattr(schema_model, "__name__", "response_schema")
+    normalized = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_name).strip("_")
+    return normalized or "response_schema"
