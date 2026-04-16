@@ -184,8 +184,8 @@ class SourceHuntRunner:
             try:
                 ranker_config = RankerConfig()
                 if ranker_llm.provider_name == "openai_resp":
-                    ranker_config.chunk_size = 100
-                    ranker_config.max_inflight_chunks = 2
+                    ranker_config.chunk_size = 30
+                    ranker_config.max_inflight_chunks = 1
                     logger.info(
                         "Ranker tuned for openai_resp backend: chunk_size=%d max_inflight_chunks=%d",
                         ranker_config.chunk_size,
