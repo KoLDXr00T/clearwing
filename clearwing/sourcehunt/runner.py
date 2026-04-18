@@ -161,6 +161,8 @@ class SourceHuntRunner:
         elaboration_cap: str = "10%",  # max findings to elaborate
         adversarial_verifier: bool = True,  # v0.2: on by default
         adversarial_threshold: EvidenceLevel | None = "static_corroboration",  # v0.4: budget gate
+        validator_mode: str = "v2",  # "v1" (old Verifier) | "v2" (4-axis Validator)
+        enable_calibration: bool = True,  # v0.5: severity calibration tracking
         enable_mechanism_memory: bool = True,  # v0.3: cross-run mechanism store
         mechanism_store_path: Any = None,  # override default store location
         enable_patch_oracle: bool = True,  # v0.3: patch oracle truth test
@@ -215,6 +217,14 @@ class SourceHuntRunner:
         self._elaboration_cap = elaboration_cap
         self.adversarial_verifier = adversarial_verifier
         self.adversarial_threshold = adversarial_threshold
+        self.validator_mode = validator_mode
+        self._calibration_store = None
+        if enable_calibration:
+            try:
+                from .calibration import CalibrationStore
+                self._calibration_store = CalibrationStore()
+            except Exception:
+                logger.debug("CalibrationStore init failed", exc_info=True)
         self.enable_mechanism_memory = enable_mechanism_memory
         self._mechanism_store = (
             MechanismStore(path=mechanism_store_path) if enable_mechanism_memory else None
@@ -593,78 +603,27 @@ class SourceHuntRunner:
 
             # 4. Verify (unless --no-verify)
             verified: list[Finding] = []
+            rejected: list[Finding] = []
             if not self.no_verify:
                 verifier_llm = self._get_native_client("verifier", self.verifier_llm)
                 if verifier_llm is not None:
-                    v = Verifier(
-                        verifier_llm,
-                        adversarial=self.adversarial_verifier,
-                        adversarial_threshold=self.adversarial_threshold,
-                    )
-                    for finding in all_findings:
-                        try:
-                            result = await v.averify(
-                                finding,
-                                file_content=self._load_file_content(repo_path, finding),
-                            )
-                            # v0.3: patch-oracle truth test on verified findings.
-                            # Use a real sandbox validator when sandbox_factory is
-                            # wired; otherwise fall back to LLM-only mode.
-                            if self.enable_patch_oracle and result.is_real:
-                                try:
-                                    oracle_sandbox = None
-                                    oracle_rerun_poc = None
-                                    if self.sandbox_factory is not None:
-                                        try:
-                                            oracle_sandbox = self.sandbox_factory()
-                                            oracle_rerun_poc = build_rerun_poc_callback(
-                                                oracle_sandbox,
-                                            )
-                                        except Exception:
-                                            logger.debug(
-                                                "Patch-oracle sandbox spawn failed",
-                                                exc_info=True,
-                                            )
-                                            oracle_sandbox = None
-                                            oracle_rerun_poc = None
-                                    try:
-                                        passed, diff, notes = await v.arun_patch_oracle(
-                                            finding,
-                                            file_content=self._load_file_content(
-                                                repo_path, finding
-                                            ),
-                                            sandbox=oracle_sandbox,
-                                            rerun_poc=oracle_rerun_poc,
-                                        )
-                                    finally:
-                                        if oracle_sandbox is not None:
-                                            try:
-                                                oracle_sandbox.stop()
-                                            except Exception:
-                                                pass
-                                    result.patch_oracle_attempted = True
-                                    result.patch_oracle_passed = passed
-                                    result.patch_oracle_diff = diff
-                                    result.patch_oracle_notes = notes
-                                except Exception:
-                                    logger.debug("Patch-oracle pass failed", exc_info=True)
-                            apply_verifier_result(
-                                finding, result, session_id=self._session_id + "-v"
-                            )
-                            if finding.get("verified"):
-                                verified.append(finding)
-                        except Exception:
-                            logger.warning(
-                                "Verifier failed for %s", finding.get("id"), exc_info=True
-                            )
+                    if self.validator_mode == "v2":
+                        verified, rejected = await self._verify_v2(
+                            verifier_llm, all_findings, repo_path,
+                        )
+                    else:
+                        verified = await self._verify_v1(
+                            verifier_llm, all_findings, repo_path,
+                        )
                 else:
-                    # Without a verifier LLM, treat every finding as verified
-                    # (low-trust mode — mark them as static-only confidence)
                     for f in all_findings:
                         f["verified"] = True
                     verified = all_findings
             else:
                 verified = all_findings
+
+            if rejected:
+                self._write_rejected_findings(rejected)
 
             # 4.5. v0.3: Extract mechanisms from verified findings and persist them
             #      to the cross-run store. Cheap LLM pass; failures are non-fatal.
@@ -1047,6 +1006,172 @@ class SourceHuntRunner:
             )
         except Exception:
             logger.debug("gh pr create failed", exc_info=True)
+
+    async def _verify_v1(
+        self,
+        verifier_llm: AsyncLLMClient,
+        all_findings: list[Finding],
+        repo_path: str,
+    ) -> list[Finding]:
+        """Legacy v1 verification using the Verifier class."""
+        verified: list[Finding] = []
+        v = Verifier(
+            verifier_llm,
+            adversarial=self.adversarial_verifier,
+            adversarial_threshold=self.adversarial_threshold,
+        )
+        for finding in all_findings:
+            try:
+                result = await v.averify(
+                    finding,
+                    file_content=self._load_file_content(repo_path, finding),
+                )
+                if self.enable_patch_oracle and result.is_real:
+                    result = await self._run_patch_oracle_v1(v, finding, repo_path, result)
+                apply_verifier_result(
+                    finding, result, session_id=self._session_id + "-v",
+                )
+                if finding.get("verified"):
+                    verified.append(finding)
+            except Exception:
+                logger.warning(
+                    "Verifier failed for %s", finding.get("id"), exc_info=True,
+                )
+        return verified
+
+    async def _verify_v2(
+        self,
+        verifier_llm: AsyncLLMClient,
+        all_findings: list[Finding],
+        repo_path: str,
+    ) -> tuple[list[Finding], list[Finding]]:
+        """4-axis validation (spec 009)."""
+        from .validator import Validator, apply_validator_verdict
+
+        verified: list[Finding] = []
+        rejected: list[Finding] = []
+        val = Validator(
+            verifier_llm,
+            gate_threshold=self.adversarial_threshold,
+        )
+        for finding in all_findings:
+            try:
+                discoverer_sev = finding.get("severity")
+                verdict = await val.avalidate(
+                    finding,
+                    file_content=self._load_file_content(repo_path, finding),
+                )
+                if self.enable_patch_oracle and verdict.advance:
+                    verdict = await self._run_patch_oracle_v2(
+                        val, finding, repo_path, verdict,
+                    )
+                apply_validator_verdict(
+                    finding, verdict,
+                    session_id=self._session_id + "-v",
+                    discoverer_severity=discoverer_sev,
+                )
+                if finding.get("verified"):
+                    verified.append(finding)
+                else:
+                    rejected.append(finding)
+                self._record_calibration(finding, verdict, discoverer_sev)
+            except Exception:
+                logger.warning(
+                    "Validator failed for %s", finding.get("id"), exc_info=True,
+                )
+        return verified, rejected
+
+    async def _run_patch_oracle_v1(self, v, finding, repo_path, result):
+        try:
+            oracle_sandbox = None
+            oracle_rerun_poc = None
+            if self.sandbox_factory is not None:
+                try:
+                    oracle_sandbox = self.sandbox_factory()
+                    oracle_rerun_poc = build_rerun_poc_callback(oracle_sandbox)
+                except Exception:
+                    logger.debug("Patch-oracle sandbox spawn failed", exc_info=True)
+            try:
+                passed, diff, notes = await v.arun_patch_oracle(
+                    finding,
+                    file_content=self._load_file_content(repo_path, finding),
+                    sandbox=oracle_sandbox,
+                    rerun_poc=oracle_rerun_poc,
+                )
+            finally:
+                if oracle_sandbox is not None:
+                    try:
+                        oracle_sandbox.stop()
+                    except Exception:
+                        pass
+            result.patch_oracle_attempted = True
+            result.patch_oracle_passed = passed
+            result.patch_oracle_diff = diff
+            result.patch_oracle_notes = notes
+        except Exception:
+            logger.debug("Patch-oracle pass failed", exc_info=True)
+        return result
+
+    async def _run_patch_oracle_v2(self, val, finding, repo_path, verdict):
+        try:
+            oracle_sandbox = None
+            oracle_rerun_poc = None
+            if self.sandbox_factory is not None:
+                try:
+                    oracle_sandbox = self.sandbox_factory()
+                    oracle_rerun_poc = build_rerun_poc_callback(oracle_sandbox)
+                except Exception:
+                    logger.debug("Patch-oracle sandbox spawn failed", exc_info=True)
+            try:
+                passed, diff, notes = await val.arun_patch_oracle(
+                    finding,
+                    file_content=self._load_file_content(repo_path, finding),
+                    sandbox=oracle_sandbox,
+                    rerun_poc=oracle_rerun_poc,
+                )
+            finally:
+                if oracle_sandbox is not None:
+                    try:
+                        oracle_sandbox.stop()
+                    except Exception:
+                        pass
+            verdict.patch_oracle_attempted = True
+            verdict.patch_oracle_passed = passed
+            verdict.patch_oracle_diff = diff
+            verdict.patch_oracle_notes = notes
+        except Exception:
+            logger.debug("Patch-oracle pass failed", exc_info=True)
+        return verdict
+
+    def _record_calibration(self, finding, verdict, discoverer_sev):
+        if self._calibration_store is None:
+            return
+        try:
+            from .calibration import CalibrationRecord
+            import datetime
+            self._calibration_store.append(CalibrationRecord(
+                finding_id=finding.get("id", ""),
+                session_id=self._session_id,
+                cwe=finding.get("cwe", ""),
+                discoverer_severity=discoverer_sev or "unknown",
+                validator_severity=verdict.severity_validated,
+                axes={k: v.passed for k, v in verdict.axes.items()},
+                timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            ))
+        except Exception:
+            logger.debug("Calibration record failed", exc_info=True)
+
+    def _write_rejected_findings(self, rejected: list[Finding]) -> None:
+        import json as _json
+        session_dir = self._ensure_output_dir_layout()
+        path = session_dir / "rejected_findings.jsonl"
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                for finding in rejected:
+                    f.write(_json.dumps(finding, default=str) + "\n")
+            logger.info("Wrote %d rejected findings to %s", len(rejected), path)
+        except OSError:
+            logger.warning("Failed to write rejected findings", exc_info=True)
 
     def _load_file_content(self, repo_path: str, finding: Finding) -> str:
         """Read the file referenced by a finding. Used by the patch oracle."""

@@ -168,6 +168,19 @@ def add_parser(subparsers):
         'budget on. "always" disables the gate; default is '
         "static_corroboration.",
     )
+    parser.add_argument(
+        "--validator-mode",
+        choices=["v1", "v2"],
+        default="v2",
+        dest="validator_mode",
+        help="Validation mode: v1 (legacy verifier) or v2 (4-axis validator, default).",
+    )
+    parser.add_argument(
+        "--calibrate",
+        metavar="SESSION_ID",
+        default=None,
+        help="Interactively assign human severity ratings for calibration tracking.",
+    )
     parser.add_argument("--no-exploit", action="store_true", help="Skip the exploit-triage pass")
     parser.add_argument(
         "--exploit-budget",
@@ -507,6 +520,45 @@ def handle(cli, args):
             )
         sys.exit(0)
 
+    # Calibrate mode: assign human severity ratings for calibration tracking
+    if args.calibrate:
+        from ...sourcehunt.calibration import CalibrationStore
+        from ...sourcehunt.elaboration import load_session_findings
+
+        session_id = args.calibrate
+        all_findings = load_session_findings(args.output_dir, session_id)
+        verified = [f for f in all_findings if f.get("verified")]
+        if not verified:
+            cli.console.print(
+                f"[yellow]No verified findings in session {session_id}[/yellow]"
+            )
+            sys.exit(0)
+
+        store = CalibrationStore()
+        cli.console.print(
+            f"[bold blue]Calibrating {len(verified)} verified findings "
+            f"from session {session_id}[/bold blue]"
+        )
+        for f in verified:
+            fid = f.get("id", "?")
+            sev = (f.get("severity_verified") or f.get("severity") or "?").upper()
+            desc = f.get("description", "")[:80]
+            cli.console.print(f"\n  [{sev}] {fid}: {desc}")
+            human = input("  Human severity (critical/high/medium/low/info, or skip): ").strip().lower()
+            if human in ("critical", "high", "medium", "low", "info"):
+                store.record_human_verdict(fid, session_id, human)
+                cli.console.print(f"  Recorded: {human}")
+            else:
+                cli.console.print("  Skipped")
+
+        stats = store.stats()
+        cli.console.print(f"\n[bold]Calibration stats:[/bold]")
+        cli.console.print(f"  Total records: {stats['total_records']}")
+        cli.console.print(f"  Human reviewed: {stats['human_reviewed']}")
+        cli.console.print(f"  Exact match rate: {stats['exact_match_rate']:.1%}")
+        cli.console.print(f"  Within-one rate: {stats['within_one_rate']:.1%}")
+        sys.exit(0)
+
     # Webhook mode: start an HTTP server that runs sourcehunt on each commit
     if args.webhook:
         from ...sourcehunt.commit_monitor import CommitMonitor, CommitMonitorConfig
@@ -621,6 +673,7 @@ def handle(cli, args):
         adversarial_threshold=(
             None if args.adversarial_threshold == "always" else args.adversarial_threshold
         ),
+        validator_mode=args.validator_mode,
         enable_variant_loop=not args.no_variant_loop,
         enable_mechanism_memory=not args.no_mechanism_memory,
         enable_patch_oracle=not args.no_patch_oracle,

@@ -164,6 +164,59 @@ class ElaborationResult:
     transcript_path: str = ""
 
 
+# --- Validation types (spec 009) ---------------------------------------------
+
+
+@dataclass
+class AxisResult:
+    """Result of a single validation axis."""
+
+    axis: str  # "REAL" | "TRIGGERABLE" | "IMPACTFUL" | "GENERAL"
+    passed: bool
+    confidence: str  # "high" | "medium" | "low"
+    rationale: str
+    boundary_crossed: str = ""  # only for IMPACTFUL axis
+
+
+@dataclass
+class ValidatorVerdict:
+    """Output of the unified 4-axis validator (spec 009)."""
+
+    finding_id: str
+    axes: dict[str, AxisResult]
+    advance: bool
+    severity_validated: str | None
+    evidence_level: EvidenceLevel
+    pro_argument: str
+    counter_argument: str
+    tie_breaker: str
+    duplicate_cve: str | None
+    raw_response: str = ""
+    patch_oracle_attempted: bool = False
+    patch_oracle_passed: bool | None = None
+    patch_oracle_diff: str = ""
+    patch_oracle_notes: str = ""
+
+    def to_verifier_result(self):
+        from clearwing.sourcehunt.verifier import VerifierResult
+
+        return VerifierResult(
+            finding_id=self.finding_id,
+            is_real=self.advance,
+            severity_verified=self.severity_validated,
+            evidence_level=self.evidence_level,
+            pro_argument=self.pro_argument,
+            counter_argument=self.counter_argument,
+            tie_breaker=self.tie_breaker,
+            duplicate_cve=self.duplicate_cve,
+            raw_response=self.raw_response,
+            patch_oracle_attempted=self.patch_oracle_attempted,
+            patch_oracle_passed=self.patch_oracle_passed,
+            patch_oracle_diff=self.patch_oracle_diff,
+            patch_oracle_notes=self.patch_oracle_notes,
+        )
+
+
 # --- SourceHuntState ---------------------------------------------------------
 
 

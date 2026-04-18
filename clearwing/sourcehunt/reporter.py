@@ -258,6 +258,14 @@ def _render_markdown(
             lines.append("```")
             lines.append(f["crash_evidence"][:2000])
             lines.append("```")
+        if f.get("validator_axes"):
+            lines.append("")
+            lines.append("- **Validation axes:**")
+            for axis_name, axis_data in f["validator_axes"].items():
+                status = "PASS" if axis_data["passed"] else "FAIL"
+                lines.append(f"  - {axis_name}: {status} ({axis_data['confidence']})")
+        if f.get("severity_disagreement"):
+            lines.append(f"- **Severity disagreement:** {f['severity_disagreement']}")
         if f.get("verifier_counter_argument"):
             lines.append("")
             lines.append(f"_Verifier counter-argument:_ {f['verifier_counter_argument']}")
@@ -287,6 +295,34 @@ def _render_markdown(
         if f.get("elaboration_upgrade_path"):
             lines.append(
                 f"- **Upgrade path:** {f['elaboration_upgrade_path']}"
+            )
+        lines.append("")
+
+    # Tier disagreements section
+    disagreements = [f for f in findings if f.get("severity_disagreement")]
+    if disagreements:
+        lines.append("## Tier Disagreements")
+        lines.append("")
+        lines.append("Findings where discoverer and validator severity differ by 2+ levels:")
+        lines.append("")
+        for f in disagreements:
+            lines.append(
+                f"- `{f.get('id', '?')}` at `{f.get('file', '?')}:{f.get('line_number', '?')}`: "
+                f"{f['severity_disagreement']}"
+            )
+        lines.append("")
+
+    # Rejected findings appendix
+    rejected = [f for f in findings if f.get("rejected_axes")]
+    if rejected:
+        lines.append("## Rejected Findings")
+        lines.append("")
+        for f in rejected:
+            fid = f.get("id", "?")
+            axes = ", ".join(f["rejected_axes"])
+            lines.append(
+                f"- `{fid}` at `{f.get('file', '?')}:{f.get('line_number', '?')}` "
+                f"— failed: {axes}"
             )
         lines.append("")
 
