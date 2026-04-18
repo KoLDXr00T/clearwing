@@ -157,6 +157,11 @@ def add_parser(subparsers):
         "--no-patch-oracle", action="store_true", help="Skip the patch-oracle truth test (v0.3)"
     )
     parser.add_argument(
+        "--no-findings-pool",
+        action="store_true",
+        help="Disable the shared findings pool (dedup + cross-agent queries)",
+    )
+    parser.add_argument(
         "--auto-patch", action="store_true", help="Enable auto-patch mode (v0.3 — opt-in)"
     )
     parser.add_argument(
@@ -512,6 +517,7 @@ def handle(cli, args):
         seed_corpus_sources=(
             (["git_cve"] if args.seed_cves else []) or None
         ),
+        enable_findings_pool=not args.no_findings_pool,
     )
 
     cli.console.print(

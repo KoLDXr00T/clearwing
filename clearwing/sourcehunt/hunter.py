@@ -904,6 +904,7 @@ def _build_deep_agent_prompt(
     specialist: str = "general",
     entry_point: Any = None,
     seed_context: str | None = None,
+    findings_pool: Any = None,
 ) -> str:
     """Render the deep agent prompt for this file."""
     seeded_crash_block = ""
@@ -950,6 +951,11 @@ def _build_deep_agent_prompt(
     if seed_context:
         prompt += "\n" + SEED_CORPUS_BLOCK.format(seed_context=seed_context)
 
+    if findings_pool is not None:
+        count = len(findings_pool.all_findings())
+        if count > 0:
+            prompt += "\n" + POOL_ACCESS_BLOCK.format(count=count)
+
     return prompt
 
 
@@ -962,6 +968,7 @@ def _build_unconstrained_prompt(
     exploit_mode: bool = False,
     entry_point: Any = None,
     seed_context: str | None = None,
+    findings_pool: Any = None,
 ) -> str:
     """Build the unconstrained discovery prompt for any agent mode."""
     seed_parts: list[str] = []
@@ -1007,6 +1014,11 @@ def _build_unconstrained_prompt(
     if seed_context:
         prompt += "\n" + SEED_CORPUS_BLOCK.format(seed_context=seed_context)
 
+    if findings_pool is not None:
+        count = len(findings_pool.all_findings())
+        if count > 0:
+            prompt += "\n" + POOL_ACCESS_BLOCK.format(count=count)
+
     prompt += "\n" + SELF_CHECK
 
     return prompt
@@ -1030,6 +1042,12 @@ Prior crash/CVE history for this code:
 This context is informational — these specific bugs are patched. But the \
 history suggests this code path has been fragile and may contain related \
 issues."""
+
+POOL_ACCESS_BLOCK = """
+Other hunters have found {count} findings so far in this campaign. \
+Use the query_findings_pool tool to search for complementary primitives \
+if you discover a vulnerability that could be chained with others \
+(e.g., you find a write primitive — query for info_leak to bypass ASLR)."""
 
 
 # --- Public factory ----------------------------------------------------------
@@ -1397,6 +1415,7 @@ def build_hunter_agent(
     seed_transcript: str | None = None,
     entry_point: Any = None,
     seed_context: str | None = None,
+    findings_pool: Any = None,
 ) -> tuple[NativeHunter, HunterContext]:
     """Build a per-file native hunter runtime.
 
@@ -1424,6 +1443,7 @@ def build_hunter_agent(
                       instructions to the prompt.
         seed_transcript: Summary from a prior run (band promotion). Appended
                          to the prompt so the agent continues from prior work.
+        findings_pool: Shared findings pool for cross-agent queries (spec 005).
 
     Returns:
         (native_hunter, hunter_context). The caller owns the context and
@@ -1449,6 +1469,7 @@ def build_hunter_agent(
         seeded_crash=seeded_crash,
         sandbox_manager=sandbox_manager,
         default_sanitizers=tuple(default_sanitizers),
+        findings_pool=findings_pool,
     )
 
     if specialist == "propagation":
@@ -1466,6 +1487,7 @@ def build_hunter_agent(
             exploit_mode=exploit_mode,
             entry_point=entry_point,
             seed_context=seed_context,
+            findings_pool=findings_pool,
         )
         if agent_mode == "deep":
             tools = build_deep_agent_tools(ctx)
@@ -1484,6 +1506,7 @@ def build_hunter_agent(
             specialist=specialist,
             entry_point=entry_point,
             seed_context=seed_context,
+            findings_pool=findings_pool,
         )
         max_steps = 500
     else:

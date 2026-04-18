@@ -142,6 +142,8 @@ class SourceHuntRunner:
         min_shard_rank: int = 4,
         min_project_loc: int = 50_000,
         seed_corpus_sources: list[str] | None = None,
+        enable_findings_pool: bool = True,
+        historical_db_path: Any = None,
     ):
         self.repo_url = repo_url
         self.branch = branch
@@ -189,6 +191,8 @@ class SourceHuntRunner:
         self._min_shard_rank = min_shard_rank
         self._min_project_loc = min_project_loc
         self._seed_corpus_sources = seed_corpus_sources
+        self._enable_findings_pool = enable_findings_pool
+        self._historical_db_path = historical_db_path
 
     @property
     def _agent_mode(self) -> str:
@@ -354,6 +358,26 @@ class SourceHuntRunner:
                 except Exception:
                     logger.warning("Seed corpus ingestion failed", exc_info=True)
 
+            # 2.9. Shared findings pool (spec 005)
+            findings_pool = None
+            historical_db = None
+            if self._enable_findings_pool:
+                from .findings_pool import FindingsPool
+                from .historical_findings_db import HistoricalFindingsDB
+
+                checkpoint_path = (
+                    Path(self.output_dir) / self._session_id / "findings_pool.jsonl"
+                )
+                findings_pool = FindingsPool(checkpoint_path=checkpoint_path)
+                try:
+                    historical_db = HistoricalFindingsDB(path=self._historical_db_path)
+                    prior = historical_db.query_prior(repo_url=self.repo_url)
+                    if prior:
+                        logger.info("Loaded %d historical findings for dedup", len(prior))
+                except Exception:
+                    logger.warning("Historical findings DB load failed", exc_info=True)
+                    historical_db = None
+
             # 3. Tiered hunt
             hunter_llm = self._get_native_client("hunter", self.hunter_llm)
             all_findings: list[Finding] = []
@@ -384,6 +408,7 @@ class SourceHuntRunner:
                         entry_points_by_file=entry_points_by_file,
                         seed_corpus_by_file=seed_corpus_by_file,
                         shard_entry_points=self._shard_entry_points,
+                        findings_pool=findings_pool,
                     )
                 )
                 try:
@@ -416,6 +441,18 @@ class SourceHuntRunner:
             # Promote static findings into the all_findings list so depth=quick
             # output is still useful when no hunter llm is available
             all_findings = self._merge_static_findings(all_findings, preprocess_result)
+
+            # 3.5. Persist findings to historical DB (spec 005)
+            if historical_db is not None and all_findings:
+                try:
+                    count = historical_db.ingest_campaign(
+                        all_findings, repo_url=self.repo_url, session_id=self._session_id,
+                    )
+                    logger.info("Persisted %d findings to historical DB", count)
+                except Exception:
+                    logger.warning("Historical DB ingest failed", exc_info=True)
+                finally:
+                    historical_db.close()
 
             # 4. Verify (unless --no-verify)
             verified: list[Finding] = []
@@ -642,11 +679,13 @@ class SourceHuntRunner:
                     logger.warning("Disclosure export failed", exc_info=True)
 
             # 6. Report
+            _pool_stats = findings_pool.pool_stats() if findings_pool is not None else None
             output_paths = self._write_report(
                 findings=all_findings,
                 verified=verified,
                 spent_per_tier=spent_per_tier,
                 band_stats=band_stats,
+                pool_stats=_pool_stats,
             )
 
             duration = time.monotonic() - start_time
@@ -1099,6 +1138,7 @@ class SourceHuntRunner:
         verified: list[Finding],
         spent_per_tier: dict,
         band_stats: dict | None = None,
+        pool_stats: dict | None = None,
     ) -> dict[str, str]:
         """Write SARIF / markdown / JSON outputs to the output directory.
 
@@ -1121,6 +1161,7 @@ class SourceHuntRunner:
                 spent_per_tier=spent_per_tier,
                 formats=self.output_formats,
                 band_stats=band_stats,
+                pool_stats=pool_stats,
             )
         except Exception:
             logger.warning("Reporter failed", exc_info=True)

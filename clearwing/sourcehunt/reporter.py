@@ -30,6 +30,7 @@ def write_sourcehunt_report(
     spent_per_tier: dict,
     formats: list[str] | None = None,
     band_stats: dict | None = None,
+    pool_stats: dict | None = None,
 ) -> dict[str, str]:
     """Write the requested formats. Returns {format: filesystem_path}."""
     formats = formats or ["sarif", "markdown", "json"]
@@ -61,6 +62,7 @@ def write_sourcehunt_report(
             verified_findings=verified_findings,
             spent_per_tier=spent_per_tier,
             band_stats=band_stats,
+            pool_stats=pool_stats,
         )
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(md)
@@ -77,6 +79,8 @@ def write_sourcehunt_report(
         }
         if band_stats:
             json_data["band_stats"] = band_stats
+        if pool_stats:
+            json_data["pool_stats"] = pool_stats
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(json_data, f, indent=2, default=_json_default)
         paths["json"] = str(json_path)
@@ -148,6 +152,7 @@ def _render_markdown(
     verified_findings: list[Finding],
     spent_per_tier: dict,
     band_stats: dict | None = None,
+    pool_stats: dict | None = None,
 ) -> str:
     lines = []
     lines.append(f"# Sourcehunt Report — {session_id}")
@@ -177,6 +182,19 @@ def _render_markdown(
             promo_parts = ", ".join(f"{k}: {v}" for k, v in promos.items() if v)
             if promo_parts:
                 lines.append(f"- **Promotions:** {promo_parts}")
+        lines.append("")
+
+    if pool_stats:
+        lines.append("## Dedup Summary")
+        lines.append(
+            f"- **Total findings:** {pool_stats.get('total_findings', 0)}"
+        )
+        lines.append(
+            f"- **Unique clusters:** {pool_stats.get('total_clusters', 0)}"
+        )
+        lines.append(
+            f"- **Duplicates removed:** {pool_stats.get('duplicates', 0)}"
+        )
         lines.append("")
 
     # Severity histogram

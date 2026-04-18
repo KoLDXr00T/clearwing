@@ -42,6 +42,7 @@ from .discovery import (
     build_discovery_tools,
 )
 from .deep_agent import build_deep_agent_tools
+from .pool_query import build_pool_query_tools
 from .reporting import build_reporting_tools
 from .sandbox import HunterContext, _parse_variant_arg
 
@@ -52,11 +53,14 @@ def build_hunter_tools(ctx: HunterContext) -> list:
     Composes discovery + analysis + reporting into a single flat list
     in the order the legacy hunter_tools.py closure emitted them.
     """
-    return [
+    tools = [
         *build_discovery_tools(ctx),
         *build_analysis_tools(ctx),
         *build_reporting_tools(ctx),
     ]
+    if ctx.findings_pool is not None:
+        tools.extend(build_pool_query_tools(ctx))
+    return tools
 
 
 def build_propagation_auditor_tools(ctx: HunterContext) -> list:
@@ -67,10 +71,13 @@ def build_propagation_auditor_tools(ctx: HunterContext) -> list:
     on-task: discovery tools (read_source_file, list_source_tree,
     grep_source, find_callers) + record_finding.
     """
-    return [
+    tools = [
         *build_discovery_tools(ctx),
         *build_reporting_tools(ctx),
     ]
+    if ctx.findings_pool is not None:
+        tools.extend(build_pool_query_tools(ctx))
+    return tools
 
 
 __all__ = [
@@ -83,6 +90,7 @@ __all__ = [
     "build_discovery_tools",
     "build_analysis_tools",
     "build_reporting_tools",
+    "build_pool_query_tools",
     # Re-exported helpers for test reach-ins
     "_container_path",
     "_default_libfuzzer_template",

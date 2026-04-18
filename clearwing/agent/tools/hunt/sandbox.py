@@ -41,6 +41,7 @@ class HunterContext:
     sandbox_manager: object | None = None  # HunterSandbox (avoiding circular import)
     variant_sandboxes: dict = field(default_factory=dict)  # {variant_key: SandboxContainer}
     default_sanitizers: tuple = ("asan", "ubsan")
+    findings_pool: object | None = None  # FindingsPool (avoiding circular import)
 
     def get_sandbox_for_variant(
         self,

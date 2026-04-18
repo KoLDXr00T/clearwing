@@ -15,6 +15,7 @@ import shlex
 
 from clearwing.llm import NativeToolSpec
 
+from .pool_query import build_pool_query_tools
 from .reporting import build_reporting_tools
 from .sandbox import HunterContext
 
@@ -159,4 +160,5 @@ def build_deep_agent_tools(ctx: HunterContext) -> list[NativeToolSpec]:
             handler=think,
         ),
         *reporting_tools,
+        *(build_pool_query_tools(ctx) if ctx.findings_pool is not None else []),
     ]

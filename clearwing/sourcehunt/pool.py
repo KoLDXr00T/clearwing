@@ -189,6 +189,7 @@ class HuntPoolConfig:
     entry_points_by_file: dict = field(default_factory=dict)  # {path: [EntryPoint]}
     seed_corpus_by_file: dict = field(default_factory=dict)  # {path: [SeedCorpusEntry]}
     shard_entry_points: bool = False
+    findings_pool: Any = None  # FindingsPool | None — spec 005
 
 
 def _format_seed_context(entries: list) -> str | None:
@@ -306,16 +307,19 @@ class HunterPool:
         for tr in error_results[:10]:
             logger.warning("HunterPool error for %s: %s", tr.target, tr.error or "(no error text)")
         all_findings: list[Finding] = []
-        for tr in target_results:
-            if tr.status == "completed":
-                for f in cast(list[Finding], tr.findings):
-                    all_findings.append(f)
-                if self.config.on_finding:
+        if self.config.findings_pool is not None:
+            all_findings = self.config.findings_pool.all_findings()
+        else:
+            for tr in target_results:
+                if tr.status == "completed":
                     for f in cast(list[Finding], tr.findings):
-                        try:
-                            self.config.on_finding(f)
-                        except Exception:
-                            logger.debug("on_finding callback failed", exc_info=True)
+                        all_findings.append(f)
+        if self.config.on_finding:
+            for f in all_findings:
+                try:
+                    self.config.on_finding(f)
+                except Exception:
+                    logger.debug("on_finding callback failed", exc_info=True)
         logger.info(
             "HunterPool finished: completed=%d findings=%d spent_tier=%s spent_band=%s promotions=%s",
             sum(1 for tr in target_results if tr.status == "completed"),
@@ -451,6 +455,13 @@ class HunterPool:
                 self._spent_per_band[wi.band] = self._spent_per_band.get(wi.band, 0.0) + result.cost_usd
                 self._runs_per_band[wi.band] = self._runs_per_band.get(wi.band, 0) + 1
                 spent += result.cost_usd
+
+                if result.status == "completed" and self.config.findings_pool is not None:
+                    for f in cast(list[Finding], result.findings):
+                        try:
+                            await self.config.findings_pool.add(f)
+                        except Exception:
+                            logger.debug("findings_pool.add failed", exc_info=True)
 
                 if result.status == "completed":
                     next_band = promotion_decision(
@@ -608,4 +619,5 @@ class HunterPool:
             seed_transcript=seed_transcript,
             entry_point=entry_point,
             seed_context=seed_context,
+            findings_pool=self.config.findings_pool,
         )

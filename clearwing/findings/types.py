@@ -90,6 +90,10 @@ class Finding:
     related_cve: str | None = None
     seeded_from_crash: bool = False
 
+    # Shared findings pool (spec 005)
+    primitive_type: str = ""
+    cluster_id: str = ""
+
     # Verifier (v0.2 adversarial)
     verified: bool = False
     verifier_pro_argument: str | None = None
