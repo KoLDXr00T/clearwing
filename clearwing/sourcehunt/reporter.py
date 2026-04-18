@@ -146,6 +146,11 @@ def _details_block(f: Finding) -> str:
         parts.append(f"verifier_pro: {f['verifier_pro_argument']}")
     if f.get("verifier_counter_argument"):
         parts.append(f"verifier_counter: {f['verifier_counter_argument']}")
+    if f.get("stability_classification"):
+        rate = f.get("stability_success_rate", 0) * 100
+        parts.append(
+            f"stability: {f['stability_classification']} ({rate:.0f}% reproduction)"
+        )
     return "\n\n".join(parts)
 
 
@@ -296,6 +301,13 @@ def _render_markdown(
             lines.append(
                 f"- **Upgrade path:** {f['elaboration_upgrade_path']}"
             )
+        if f.get("stability_classification"):
+            cls = f["stability_classification"]
+            rate = f.get("stability_success_rate", 0) * 100
+            lines.append(f"- **Stability:** {cls} ({rate:.0f}% reproduction rate)")
+            if f.get("stability_hardened"):
+                improved = "improved" if f.get("stability_hardening_improved") else "no improvement"
+                lines.append(f"- **Hardened:** {improved}")
         lines.append("")
 
     # Tier disagreements section

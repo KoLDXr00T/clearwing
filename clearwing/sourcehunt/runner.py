@@ -166,6 +166,7 @@ class SourceHuntRunner:
         enable_mechanism_memory: bool = True,  # v0.3: cross-run mechanism store
         mechanism_store_path: Any = None,  # override default store location
         enable_patch_oracle: bool = True,  # v0.3: patch oracle truth test
+        enable_stability_verification: bool = True,  # v0.5: Stage 2.5 PoC stability
         enable_variant_loop: bool = True,  # v0.3: compound finding density
         enable_auto_patch: bool = False,  # v0.3: opt-in auto-patch mode
         auto_pr: bool = False,  # v0.3: open a draft PR via gh
@@ -230,6 +231,7 @@ class SourceHuntRunner:
             MechanismStore(path=mechanism_store_path) if enable_mechanism_memory else None
         )
         self.enable_patch_oracle = enable_patch_oracle
+        self.enable_stability_verification = enable_stability_verification
         self.enable_variant_loop = enable_variant_loop
         self.enable_auto_patch = enable_auto_patch
         self.auto_pr = auto_pr
@@ -694,6 +696,49 @@ class SourceHuntRunner:
                         )
                     except Exception:
                         logger.warning("Variant loop failed", exc_info=True)
+
+            # 4.9. Stage 2.5: PoC stability verification (spec 010).
+            # Rerun PoCs in fresh containers to measure reliability.
+            if (
+                self.enable_stability_verification
+                and verified
+                and self._sandbox_manager is not None
+            ):
+                from .stability import StabilityVerifier, apply_stability_result
+
+                stability_llm = self._get_native_client("verifier", self.verifier_llm)
+                sv = StabilityVerifier(
+                    sandbox_manager=self._sandbox_manager,
+                    hardening_llm=stability_llm,
+                )
+                stability_eligible = [
+                    f for f in verified
+                    if f.get("poc") and f.get("crash_evidence")
+                    and evidence_at_or_above(
+                        f.get("evidence_level", "suspicion"), "crash_reproduced",
+                    )
+                ]
+                stable_verified: list[Finding] = []
+                for finding in stability_eligible:
+                    try:
+                        sr = await sv.averify(finding)
+                        apply_stability_result(finding, sr)
+                        if sr.classification != "unreliable":
+                            stable_verified.append(finding)
+                        else:
+                            logger.info(
+                                "Finding %s demoted to unreliable (%.0f%% success rate)",
+                                finding.get("id"),
+                                sr.success_rate * 100,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "Stability check failed for %s",
+                            finding.get("id"), exc_info=True,
+                        )
+                        stable_verified.append(finding)
+                non_poc = [f for f in verified if f not in stability_eligible]
+                verified = stable_verified + non_poc
 
             # 5. Exploit-triage (unless --no-exploit) — gated on evidence_level
             exploited: list[Finding] = []

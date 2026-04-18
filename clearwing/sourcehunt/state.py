@@ -217,6 +217,26 @@ class ValidatorVerdict:
         )
 
 
+# --- Stability types (spec 010) -----------------------------------------------
+
+
+@dataclass
+class StabilityResult:
+    """Output of Stage 2.5 PoC stability verification (spec 010)."""
+
+    finding_id: str
+    total_runs: int
+    successes: int
+    success_rate: float  # 0.0-1.0
+    per_container_rates: list[float]
+    classification: str  # "stable" | "flaky" | "unreliable"
+    hardened: bool = False
+    hardening_improved: bool = False
+    failure_analysis: str = ""
+    original_poc: str = ""
+    hardened_poc: str | None = None
+
+
 # --- SourceHuntState ---------------------------------------------------------
 
 
@@ -264,6 +284,7 @@ class SourceHuntState(TypedDict, total=False):
         "hunt",
         "verify",
         "variant_loop",
+        "stability",
         "exploit",
         "elaborate",
         "auto_patch",

@@ -244,6 +244,11 @@ def add_parser(subparsers):
         "--no-patch-oracle", action="store_true", help="Skip the patch-oracle truth test (v0.3)"
     )
     parser.add_argument(
+        "--no-stability-check",
+        action="store_true",
+        help="Skip the PoC stability verification (Stage 2.5)",
+    )
+    parser.add_argument(
         "--no-findings-pool",
         action="store_true",
         help="Disable the shared findings pool (dedup + cross-agent queries)",
@@ -677,6 +682,7 @@ def handle(cli, args):
         enable_variant_loop=not args.no_variant_loop,
         enable_mechanism_memory=not args.no_mechanism_memory,
         enable_patch_oracle=not args.no_patch_oracle,
+        enable_stability_verification=not args.no_stability_check,
         enable_auto_patch=args.auto_patch,
         auto_pr=args.auto_pr,
         export_disclosures=args.export_disclosures,
