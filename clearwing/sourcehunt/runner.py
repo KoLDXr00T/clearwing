@@ -201,6 +201,9 @@ class SourceHuntRunner:
         no_per_file_hunt: bool = False,
         subsystem_budget_usd: float = 0.0,
         subsystem_max_parallel: int = 4,
+        enable_behavior_monitor: bool = True,
+        enable_artifact_store: bool = False,
+        gvisor_runtime: str | None = None,
     ):
         self.repo_url = repo_url
         self.branch = branch
@@ -269,6 +272,9 @@ class SourceHuntRunner:
         self._subsystem_max_parallel = subsystem_max_parallel
         self._injected_findings_pool = None
         self._injected_historical_db = None
+        self._enable_behavior_monitor = enable_behavior_monitor
+        self._enable_artifact_store = enable_artifact_store
+        self._gvisor_runtime = gvisor_runtime
 
     def _inject_campaign_pool(
         self,
@@ -537,6 +543,25 @@ class SourceHuntRunner:
                 )
             else:
                 logger.info("HunterPool skipped; no LLM available")
+
+            # 3.5. v0.6: Behavioral monitoring of findings text (spec 013).
+            if self._enable_behavior_monitor and all_findings:
+                try:
+                    from .behavior_monitor import BehaviorMonitor
+                    bmon = BehaviorMonitor(session_id=self._session_id)
+                    for f in all_findings:
+                        for field in ("description", "poc", "exploit", "evidence"):
+                            text = f.get(field, "")
+                            if text:
+                                bmon.scan_text(str(text), finding_id=f.get("id", ""))
+                    alerts = bmon.get_alerts()
+                    if alerts:
+                        logger.warning(
+                            "Behavior monitor: %d alerts — %s",
+                            len(alerts), bmon.summary(),
+                        )
+                except Exception:
+                    logger.debug("Behavior monitor failed", exc_info=True)
 
             # Promote static findings into the all_findings list so depth=quick
             # output is still useful when no hunter llm is available
@@ -930,6 +955,22 @@ class SourceHuntRunner:
                         disclosure_db.close()
                 except Exception:
                     logger.warning("Disclosure DB queue failed", exc_info=True)
+
+            # 5.87. v0.6: Store exploits in encrypted artifact store (spec 013).
+            if self._enable_artifact_store and exploited:
+                try:
+                    from .artifact_store import ArtifactStore
+                    artifact_store = ArtifactStore()
+                    for f in exploited:
+                        exploit_data = f.get("exploit") or f.get("poc")
+                        if exploit_data:
+                            if isinstance(exploit_data, str):
+                                exploit_data = exploit_data.encode()
+                            artifact_store.store_exploit(
+                                f.get("id", ""), exploit_data, operator="pipeline",
+                            )
+                except Exception:
+                    logger.warning("Artifact store failed", exc_info=True)
 
             # 6. Report
             _pool_stats = findings_pool.pool_stats() if findings_pool is not None else None
@@ -1358,16 +1399,23 @@ class SourceHuntRunner:
 
         logger.info("HunterSandbox ready image=%s", image_tag)
         self._sandbox_manager = manager
+        gvisor_rt = self._gvisor_runtime
         if use_deep:
             self.sandbox_factory = lambda **kw: manager.spawn(
                 writable_workspace=True,
                 memory_mb=kw.pop("memory_mb", 16384),
                 cpus=kw.pop("cpus", 8.0),
                 timeout_seconds=kw.pop("timeout_seconds", 600),
+                runtime=kw.pop("runtime", gvisor_rt),
                 **kw,
             )
         else:
-            self.sandbox_factory = manager.spawn
+            if gvisor_rt:
+                self.sandbox_factory = lambda **kw: manager.spawn(
+                    runtime=kw.pop("runtime", gvisor_rt), **kw,
+                )
+            else:
+                self.sandbox_factory = manager.spawn
 
     def _build_quick_result(
         self,

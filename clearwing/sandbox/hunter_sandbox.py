@@ -16,6 +16,7 @@ import logging
 import os
 import shutil
 import tempfile
+from pathlib import Path
 
 from .builders import (
     BuildRecipe,
@@ -24,6 +25,7 @@ from .builders import (
     validate_sanitizer_combo,
 )
 from .container import SandboxConfig, SandboxContainer
+from .seccomp_profiles import write_seccomp_profile
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +169,7 @@ class HunterSandbox:
         variant: list[str] | None = None,
         writable_workspace: bool = False,
         cpus: float = 0.0,
+        runtime: str | None = None,
     ) -> SandboxContainer:
         """Start a fresh container from one of the built variant images.
 
@@ -222,6 +225,9 @@ class HunterSandbox:
         # Mark the variant so hunter tools can introspect which image is running
         env["CLEARWING_SANITIZER_VARIANT"] = ",".join(chosen)
 
+        build_dir = Path(tempfile.mkdtemp(prefix="clearwing-seccomp-"))
+        seccomp_path = write_seccomp_profile("hunter", build_dir / "seccomp.json")
+
         cfg = SandboxConfig(
             image=image_tag,
             network_mode="none",
@@ -233,6 +239,11 @@ class HunterSandbox:
             env=env,
             working_dir="/workspace",
             name=None,
+            pids_limit=512,
+            security_opt=[f"seccomp={seccomp_path}"],
+            cap_drop=["ALL"],
+            cap_add=["SYS_PTRACE"],
+            runtime=runtime,
         )
 
         sb = SandboxContainer(cfg)

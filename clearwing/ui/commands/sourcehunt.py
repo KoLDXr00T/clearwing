@@ -254,6 +254,18 @@ def add_parser(subparsers):
         help="Disable the shared findings pool (dedup + cross-agent queries)",
     )
     parser.add_argument(
+        "--gvisor", action="store_true",
+        help="Use gVisor runtime for container isolation",
+    )
+    parser.add_argument(
+        "--encrypt-artifacts", action="store_true",
+        help="Enable encrypted artifact storage",
+    )
+    parser.add_argument(
+        "--no-behavior-monitor", action="store_true",
+        help="Disable behavioral monitoring",
+    )
+    parser.add_argument(
         "--auto-patch", action="store_true", help="Enable auto-patch mode (v0.3 — opt-in)"
     )
     parser.add_argument(
@@ -706,6 +718,9 @@ def handle(cli, args):
         enable_subsystem_hunt=args.subsystem_hunt or bool(args.subsystem_paths),
         subsystem_paths=args.subsystem_paths or None,
         no_per_file_hunt=args.no_per_file_hunt,
+        enable_behavior_monitor=not getattr(args, "no_behavior_monitor", False),
+        enable_artifact_store=getattr(args, "encrypt_artifacts", False),
+        gvisor_runtime="runsc" if getattr(args, "gvisor", False) else None,
     )
 
     cli.console.print(

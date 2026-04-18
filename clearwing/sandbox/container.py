@@ -51,6 +51,12 @@ class SandboxConfig:
     working_dir: str = "/workspace"
     name: str | None = None
     auto_remove: bool = True
+    pids_limit: int = 512
+    security_opt: list[str] = field(default_factory=list)
+    cap_drop: list[str] = field(default_factory=lambda: ["ALL"])
+    cap_add: list[str] = field(default_factory=lambda: ["SYS_PTRACE"])
+    read_only_rootfs: bool = False
+    runtime: str | None = None
 
 
 class SandboxContainer:
@@ -103,6 +109,17 @@ class SandboxContainer:
             "environment": self.config.env,
             "working_dir": self.config.working_dir,
         }
+        kwargs["pids_limit"] = self.config.pids_limit
+        if self.config.security_opt:
+            kwargs["security_opt"] = self.config.security_opt
+        if self.config.cap_drop:
+            kwargs["cap_drop"] = self.config.cap_drop
+        if self.config.cap_add:
+            kwargs["cap_add"] = self.config.cap_add
+        if self.config.read_only_rootfs:
+            kwargs["read_only"] = True
+        if self.config.runtime:
+            kwargs["runtime"] = self.config.runtime
         if self.config.cpus > 0:
             kwargs["nano_cpus"] = int(self.config.cpus * 1e9)
         if self.config.name:
