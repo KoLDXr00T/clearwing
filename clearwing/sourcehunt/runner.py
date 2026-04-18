@@ -267,6 +267,17 @@ class SourceHuntRunner:
         self._no_per_file_hunt = no_per_file_hunt
         self._subsystem_budget_usd = subsystem_budget_usd
         self._subsystem_max_parallel = subsystem_max_parallel
+        self._injected_findings_pool = None
+        self._injected_historical_db = None
+
+    def _inject_campaign_pool(
+        self,
+        findings_pool: Any,
+        historical_db: Any = None,
+    ) -> None:
+        """Allow campaign runner to inject a shared pool. Must be called before arun()."""
+        self._injected_findings_pool = findings_pool
+        self._injected_historical_db = historical_db
 
     @property
     def _agent_mode(self) -> str:
@@ -443,7 +454,11 @@ class SourceHuntRunner:
             # 2.9. Shared findings pool (spec 005)
             findings_pool = None
             historical_db = None
-            if self._enable_findings_pool:
+            if self._injected_findings_pool is not None:
+                # Campaign mode: use shared pool (spec 012)
+                findings_pool = self._injected_findings_pool
+                historical_db = self._injected_historical_db
+            elif self._enable_findings_pool:
                 from .findings_pool import FindingsPool
                 from .historical_findings_db import HistoricalFindingsDB
 
@@ -528,7 +543,8 @@ class SourceHuntRunner:
             all_findings = self._merge_static_findings(all_findings, preprocess_result)
 
             # 3.5. Persist findings to historical DB (spec 005)
-            if historical_db is not None and all_findings:
+            # Skip when running under campaign — campaign handles bulk ingestion.
+            if historical_db is not None and all_findings and self._injected_findings_pool is None:
                 try:
                     count = historical_db.ingest_campaign(
                         all_findings, repo_url=self.repo_url, session_id=self._session_id,
