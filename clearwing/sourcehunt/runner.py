@@ -902,6 +902,19 @@ class SourceHuntRunner:
                 except Exception:
                     logger.warning("Disclosure export failed", exc_info=True)
 
+                # 5.86. v0.5: Queue findings into disclosure DB (spec 011).
+                try:
+                    from .disclosure_db import DisclosureDB
+                    disclosure_db = DisclosureDB()
+                    try:
+                        disclosure_db.queue_findings(
+                            verified, self.repo_url, self._session_id,
+                        )
+                    finally:
+                        disclosure_db.close()
+                except Exception:
+                    logger.warning("Disclosure DB queue failed", exc_info=True)
+
             # 6. Report
             _pool_stats = findings_pool.pool_stats() if findings_pool is not None else None
             _subsystem_stats = (

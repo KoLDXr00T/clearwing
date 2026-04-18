@@ -189,6 +189,18 @@ class DisclosureGenerator:
             f"  - Severity (CVSS-ish): {severity}",
             f"  - Evidence level: {finding.get('evidence_level', '')}",
             f"  - Discovered by: {finding.get('discovered_by', '')}",
+        ]
+        if finding.get("stability_classification"):
+            rate = (finding.get("stability_success_rate") or 0) * 100
+            lines.append(
+                f"  - Reproduction stability: {finding['stability_classification']} "
+                f"({rate:.0f}%)"
+            )
+        if finding.get("severity_disagreement"):
+            lines.append(
+                f"  - Severity note: {finding['severity_disagreement']}"
+            )
+        lines += [
             "",
             "## Code snippet",
             "```",
@@ -307,6 +319,14 @@ class DisclosureGenerator:
                 "```",
                 crash,
                 "```",
+                "",
+            ]
+        if finding.get("stability_classification"):
+            rate = (finding.get("stability_success_rate") or 0) * 100
+            lines += [
+                "## Reproduction Reliability",
+                f"**Stability:** {finding['stability_classification']} "
+                f"({rate:.0f}% reproduction rate across fresh containers)",
                 "",
             ]
         lines += [

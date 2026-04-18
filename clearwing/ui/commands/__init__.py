@@ -3,6 +3,7 @@
 from . import (
     ci,
     config,
+    disclose,
     doctor,
     graph,
     history,
@@ -34,4 +35,5 @@ ALL_COMMANDS = [
     operate,
     webui,
     sourcehunt,
+    disclose,
 ]

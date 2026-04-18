@@ -15,6 +15,7 @@ Findings reaching patch_validated are the gold standard in reports.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Literal
 
 from typing_extensions import TypedDict
@@ -235,6 +236,24 @@ class StabilityResult:
     failure_analysis: str = ""
     original_poc: str = ""
     hardened_poc: str | None = None
+
+
+# --- Disclosure lifecycle (spec 011) ------------------------------------------
+
+
+class DisclosureState(str, Enum):
+    PENDING_REVIEW = "pending_review"
+    IN_REVIEW = "in_review"
+    VALIDATED = "validated"
+    REJECTED = "rejected"
+    NEEDS_REVISION = "needs_revision"
+    PENDING_DISCLOSURE = "pending_disclosure"
+    DISCLOSED = "disclosed"
+    ACKNOWLEDGED = "acknowledged"
+    PATCH_IN_PROGRESS = "patch_in_progress"
+    PATCHED = "patched"
+    PUBLIC = "public"
+    WONTFIX = "wontfix"
 
 
 # --- SourceHuntState ---------------------------------------------------------
