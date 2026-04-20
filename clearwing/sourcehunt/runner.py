@@ -1752,7 +1752,9 @@ class SourceHuntRunner:
             out.append(
                 Finding(
                     id=f"static-{uuid.uuid4().hex[:8]}",
-                    file=os.path.relpath(sf.file_path, preprocess_result.repo_path),
+                    file=Path(
+                        os.path.relpath(sf.file_path, preprocess_result.repo_path)
+                    ).as_posix(),
                     line_number=sf.line_number,
                     finding_type=sf.finding_type,
                     cwe=sf.cwe,

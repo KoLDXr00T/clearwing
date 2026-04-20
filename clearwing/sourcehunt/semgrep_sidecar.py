@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ class SemgrepSidecar:
         for r in results:
             try:
                 abs_path = r.get("path", "")
-                rel = os.path.relpath(abs_path, repo_path) if abs_path else ""
+                rel = Path(os.path.relpath(abs_path, repo_path)).as_posix() if abs_path else ""
                 start = r.get("start", {})
                 line = int(start.get("line", 0))
                 extra = r.get("extra", {})

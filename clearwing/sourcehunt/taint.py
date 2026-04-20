@@ -526,7 +526,7 @@ class TaintAnalyzer:
             logger.debug("tree-sitter parse failed for %s", abs_path, exc_info=True)
             return []
 
-        rel_path = os.path.relpath(abs_path, repo_path)
+        rel_path = Path(os.path.relpath(abs_path, repo_path)).as_posix()
         # Pass raw bytes through so byte offsets from tree-sitter work
         # correctly even when the source contains multi-byte UTF-8 chars.
         return self._walk_ast_for_taint(

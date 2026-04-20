@@ -132,6 +132,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   outputs to forward-slash paths and handle leading-slash sandbox
   inputs safely on Windows, so sourcehunt path matching stays aligned
   with the existing fixtures and `/workspace/...` expectations.
+- **Windows path normalization extended to three missed sites** —
+  `runner._merge_static_findings` (`Finding.file`), `taint._analyze_file`
+  (`TaintPath.rel_path`), and `semgrep_sidecar._parse_semgrep_json`
+  (`SemgrepFinding.file`) now wrap `os.path.relpath(...)` in
+  `Path(...).as_posix()` so all file-keyed dict lookups
+  (e.g. `semgrep_hints_by_file[rel_path]`) match on Windows instead of
+  silently orphaning hints. Extends PR #18.
 - **`clearwing config --set-provider` config.yaml bloat regression**.
   The prior `cli.config.save()` path dumped the full merged default
   config (including the 1024-port scanning defaults) into
