@@ -42,6 +42,7 @@ nav:
   - Architecture: architecture.md
   - CLI reference: cli.md
   - API reference: api.md
+  - Web API (WebSocket): web-api.md
 
 markdown_extensions:
   - admonition

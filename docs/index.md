@@ -31,6 +31,7 @@ Clearwing is a dual-mode offensive-security tool:
 | [**Architecture**](architecture.md) | How the ReAct loops, sandboxes, capabilities layer, Finding dataclass, and knowledge graph fit together |
 | [**CLI reference**](cli.md) | Every `clearwing <subcommand>` flag, with examples |
 | [**API reference**](api.md) | `clearwing.findings.Finding`, the sourcehunt runner, auto-generated from docstrings |
+| [**Web API (WebSocket)**](web-api.md) | `/ws/agent` client/server message schema for the event-streaming web UI backend |
 
 ## Project status
 

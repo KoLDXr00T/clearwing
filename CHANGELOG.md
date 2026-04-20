@@ -51,6 +51,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   replay log), and subscriber exception resilience (a raising handler,
   e.g. a disconnected `/ws/agent` client, must not crash the emitter
   and must not starve later subscribers). 8 new tests.
+- **Docs — `/ws/agent` WebSocket event schema** (`docs/web-api.md`):
+  consumer-facing reference for the event-streaming backend shipped
+  in `dd5f093`. Documents the connection lifecycle, the three
+  client-to-server frames (`start`, `message`, `approve`), the
+  server envelope (`{type, data}`), and every forwarded event
+  (`agent_message`, `tool_start`, `tool_result`, `flag_found`,
+  `cost_update`, `approval_needed`, `error`, `campaign_progress`,
+  `sourcehunt_stage`, `hunt_progress`, `validation_result`,
+  `disclosure_update`, `benchmark_progress`, `eval_progress`) plus
+  the inline `started` / streaming-`agent_message` / inline-`error`
+  frames produced by the handler itself.
 - **`clearwing setup` / `clearwing init`** — interactive provider
   wizard. Menu-driven selection from 10 backends (Anthropic,
   OpenRouter, Ollama, LM Studio, OpenAI, Together, Groq, Fireworks,
