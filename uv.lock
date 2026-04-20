@@ -712,7 +712,7 @@ requires-dist = [
     { name = "docker", specifier = ">=7.0.0" },
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },
-    { name = "genai-pyo3", specifier = ">=0.1.15" },
+    { name = "genai-pyo3", specifier = ">=0.1.16" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.5.0" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.4.0" },
@@ -1133,29 +1133,29 @@ wheels = [
 
 [[package]]
 name = "genai-pyo3"
-version = "0.1.15"
+version = "0.1.16"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d6/b7/a5ab69f8a3097d83891af9922907500414aadbd0a8d6a6230271136df6de/genai_pyo3-0.1.15.tar.gz", hash = "sha256:39be65d833d98432e88fed72f34d14b14b5458fbb6620f83ee92da1d130182f8", size = 42609 }
+sdist = { url = "https://files.pythonhosted.org/packages/23/88/f1b7026d7a14a8d7f306e30dab1d29edf2ddbb6e48665531d28f9675a5ac/genai_pyo3-0.1.16.tar.gz", hash = "sha256:1da0d4eb175bd6877bc7a5f36a79817887ce0b3b8f881d381305898bf5557388", size = 43082 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f8/15/08dad87221aaf14c8523fd4779e79f98edbe364d006067bd1c9d735bfadf/genai_pyo3-0.1.15-cp310-cp310-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:81e88b54ce0ffe906090f690981528feba66e75530a9afc7266b6812d3c399c8", size = 9023745 },
-    { url = "https://files.pythonhosted.org/packages/5e/3e/e8505fa3449a45cf5aa81e63a29cc3b5fd7628e3bd07daa1d1e22383b4b1/genai_pyo3-0.1.15-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3dd494b7fa1daf88f057ce5cbeacb88d30806468045b3ca6075f051093a9e865", size = 4796693 },
-    { url = "https://files.pythonhosted.org/packages/53/86/1f5ac3295be1d62b27ee7834545cf408d7243164371cfc6b1dabe3b04175/genai_pyo3-0.1.15-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c7b202d2580b1a11b851dc0b2b3a40dd623d86753a85fd95022e06c6ef352df8", size = 4854696 },
-    { url = "https://files.pythonhosted.org/packages/e2/d5/357587bcc0d9c985b4d649dd226e5f93ba1f115245d0c650bb46782b18a4/genai_pyo3-0.1.15-cp310-cp310-win_amd64.whl", hash = "sha256:b5cd75bf6a5d8483414c017b18f2a27edb1152e7fba4b7c7362e6a8afa7419bb", size = 3940933 },
-    { url = "https://files.pythonhosted.org/packages/fd/6c/eb8aa4826dbc7fb8e10f592b3df4521742fae559241ac8af0e542ebca9ff/genai_pyo3-0.1.15-cp311-cp311-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:e4cde56f1eb77935df7792be34d5d65936e83ba492e3a8bbe0c201220ba5854a", size = 9023370 },
-    { url = "https://files.pythonhosted.org/packages/32/b3/7f72c69e481b8c8e28eb4b1275ff78f60b2055659969d5bdb2d1dd41613f/genai_pyo3-0.1.15-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:94e570166648d641e5231dfdd2368448e616449354bda7710ebedc23d3c0b136", size = 4797973 },
-    { url = "https://files.pythonhosted.org/packages/cc/98/3b5eb1498d4d80265cf9e2cead6f31cf9b11271e34f19c20683cd33e6e3f/genai_pyo3-0.1.15-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:34f8b007dd04d43363330c3a23d19af8f813c06522ddffc7ba49d394fdfa7c1b", size = 4853930 },
-    { url = "https://files.pythonhosted.org/packages/04/bf/21646d6b7aeeb52e8b005a9236d806865970f67e55b939e797b8d5a2218f/genai_pyo3-0.1.15-cp311-cp311-win_amd64.whl", hash = "sha256:a1629bfeb873eff54ca0beb28b73712e14c9444332a8176d598fa3b1d6829814", size = 3941056 },
-    { url = "https://files.pythonhosted.org/packages/bd/8b/d8ca4bcbff2adf917c00bc5f585152392ec19cb55cc08e13b7ea501372b1/genai_pyo3-0.1.15-cp312-cp312-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:caeb8c9b1982db21ff0c21eed9c0c8ff564c9157e4057ccc82a89cba934e6ccb", size = 9017209 },
-    { url = "https://files.pythonhosted.org/packages/24/a6/2805f28ad430e23a32e8c11a441dfd3b71d355165ce5fb9fcdae9bb64715/genai_pyo3-0.1.15-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a6d069a3670df9f9b71e4e7cb3e322ed65535decba99790cc5a5292b8cd8d4eb", size = 4794499 },
-    { url = "https://files.pythonhosted.org/packages/15/7c/413002dd68b2e475d40a26ef4816099d13f5b9ee8a1b944eaf20d924fb9e/genai_pyo3-0.1.15-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:30b370252f3bfe6df40550b5eda35b6a44d4e2d91be1d3463422adbf312b2988", size = 4852687 },
-    { url = "https://files.pythonhosted.org/packages/20/a3/4f3f801074a3ceb744f7cff91fdeb73a20f648767f17e49cba1516a73094/genai_pyo3-0.1.15-cp312-cp312-win_amd64.whl", hash = "sha256:8afc3acc661686ddc462f374ab5f8d9a681c94286646c473a6d69856780e160d", size = 3934018 },
-    { url = "https://files.pythonhosted.org/packages/76/5a/804addc8b4b3066722734f748a4f5dbb1ebbee4b447c4373470d4ddc5909/genai_pyo3-0.1.15-cp313-cp313-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:141cca77faed6e70de4b7ce9a696d6f2bde70e20b7db9b5b8f0d401c54e5132e", size = 9016588 },
-    { url = "https://files.pythonhosted.org/packages/d9/08/57b3a32716f191e69cb8eb481568f81b3cf8682872028ca46d4c204794e2/genai_pyo3-0.1.15-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:82b0592b7892847c5c765ffbe165de997818a9e5ac1b08184251b8b6b36c9953", size = 4794043 },
-    { url = "https://files.pythonhosted.org/packages/fb/9a/ffb2ee6c5be4cc5a46714b52518ef81efc8e276a631ada47ac8dc72c7a67/genai_pyo3-0.1.15-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a235184c7e247886aaaab2601d33cb9b616eeacfc425bcca7823056e813637ad", size = 4852055 },
-    { url = "https://files.pythonhosted.org/packages/bf/5f/0594b8d5f30673b9fc1a5f37cc765da2d15c7b2f65f23910fe69d682f4da/genai_pyo3-0.1.15-cp313-cp313-win_amd64.whl", hash = "sha256:792a1ad203b1c27804db17b5d06d388724c0952350a6097a85f1f9dd265ac0e3", size = 3933710 },
+    { url = "https://files.pythonhosted.org/packages/68/56/8abba47cb9c3d15a2e4e2f2fb1d0a073137a8d0f9b349dc2db751746958e/genai_pyo3-0.1.16-cp310-cp310-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:59bc47ba3a76341fe7c292c5b843444c622a9c3f004069f741f1579ed351573d", size = 9021685 },
+    { url = "https://files.pythonhosted.org/packages/58/71/d412ff29b99fe37c4300f7b0ebb033d499b3637e530b34aba59713ebe089/genai_pyo3-0.1.16-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6e88e2e316d25a107eceab391b150a9649cdcb21f1c9262e71150d288a5fc960", size = 4799103 },
+    { url = "https://files.pythonhosted.org/packages/dc/1f/60364fcad2e76c0af3874a5aa97d8f1f647df5626478df8ecbb921bc4ae3/genai_pyo3-0.1.16-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:79130b51381bcb3d5c0f7d7090ff6144b294accee1ab6c43a68d3c7609670ac8", size = 4861324 },
+    { url = "https://files.pythonhosted.org/packages/03/b5/4b7c59901a435c339ff72466a78a4ea6f5d51e715be12471e4d49b684be4/genai_pyo3-0.1.16-cp310-cp310-win_amd64.whl", hash = "sha256:f442d7b5c4dc84e423219c0e122543ab532124396491c5495f587dd72877ad72", size = 3938745 },
+    { url = "https://files.pythonhosted.org/packages/03/7b/a6ef4aba4df74407d64f1358980fe21893fe0ab9e50e939552ae0a4ea344/genai_pyo3-0.1.16-cp311-cp311-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:dd9c436c9622a0b2103c4f7d32d5b363fbe0bff0a2d0d27c25dcc24186982706", size = 9021566 },
+    { url = "https://files.pythonhosted.org/packages/b8/cd/87688580048fe151a86b1b699c57d67bc98869c61ce3256aaf909d2bc879/genai_pyo3-0.1.16-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b13a50bc0380bcc518039b424fa4e3b9d7db0ee7fe5b4261489ca754ceb0a77e", size = 4801121 },
+    { url = "https://files.pythonhosted.org/packages/4e/9a/c7e0696f381abe6e873ab71aace861436473460586e9d361d96dc953c489/genai_pyo3-0.1.16-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b3ed0d8e294d12e6d67d9ef09b54f3ec8e3f8e4f266eada47032bc7648bce7c3", size = 4861113 },
+    { url = "https://files.pythonhosted.org/packages/2a/0b/07f3868225404f66a49665b366ad85ccb4f875c188debdd9dafef90a20a8/genai_pyo3-0.1.16-cp311-cp311-win_amd64.whl", hash = "sha256:c767bc67243b1cd6ecfcf6434657dd05364b5609068f796744dc1a5ce9114d78", size = 3938576 },
+    { url = "https://files.pythonhosted.org/packages/54/82/42dbd182dc69e8700eb42c838cf473f270a4edc7c994a7457e52d680d4d0/genai_pyo3-0.1.16-cp312-cp312-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:10b3786db54f9dc121323713209f7e80a8369d413a7bed8220a2ee4c64640996", size = 9020577 },
+    { url = "https://files.pythonhosted.org/packages/8c/5a/9b5423edef17cb3c7755b69d4e12093f88ea6c07c1480c35f9166e9d1d1c/genai_pyo3-0.1.16-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:95f83a428114254c3d76fd55c8db4190da7a4b47b19b38b0a093726c8bda1c7c", size = 4788912 },
+    { url = "https://files.pythonhosted.org/packages/4c/3f/5dfb607a932f9d23f746ead8632b92b934e790b6bd84b9de4bdfd0a14cb2/genai_pyo3-0.1.16-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ca6f7ad1e7a2c62be0d7ecf66e5b14508cb4012dc960540718f21376a1975cd6", size = 4857685 },
+    { url = "https://files.pythonhosted.org/packages/2c/b1/421ae886dfbcb657112d9cf8d9cf02dd8a873fecf7f6bc67e5693883cb85/genai_pyo3-0.1.16-cp312-cp312-win_amd64.whl", hash = "sha256:801c38dcb6980d559edaa4e4707563b5e0ce6fd2c68112908aa6dd3a4a972ac9", size = 3936700 },
+    { url = "https://files.pythonhosted.org/packages/83/44/3a0873033fe8c76199bcbd50d1d2534d8a72e488497cf7a85d3b4bcb1fd9/genai_pyo3-0.1.16-cp313-cp313-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:c70bee672d42bf60cecee422304c2ca51d0f601fb7e1b09472dec6f22894675c", size = 9020126 },
+    { url = "https://files.pythonhosted.org/packages/fe/22/60a9ce359c46b7b1f1d1247bb76fb2ec13111e810142aff202ae1adb2397/genai_pyo3-0.1.16-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:fd199322989c23fd681803830b3b154a5e0ccbea12c89f023ccc3466ac8920c1", size = 4788347 },
+    { url = "https://files.pythonhosted.org/packages/8e/ad/66b32d78f12c8fa3e2fc2f1518248ccfc0b7bac78bf3b825633e2dcdddb4/genai_pyo3-0.1.16-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:318c6f7dbfce12a8109501a1b41842399fe65673bd5019ca18056f2c6d74f0c7", size = 4856265 },
+    { url = "https://files.pythonhosted.org/packages/fd/5b/961066e768b833ab7e961f479d58581bfe6f761d5a8fe1c94e136f98b565/genai_pyo3-0.1.16-cp313-cp313-win_amd64.whl", hash = "sha256:d885051792250253808b2dec3b1e0efda035d4021f8adcf04d52de9467f3cba7", size = 3936672 },
 ]
 
 [[package]]
