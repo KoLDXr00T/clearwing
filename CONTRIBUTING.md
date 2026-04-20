@@ -68,14 +68,40 @@ Before opening a PR, confirm:
 - [ ] New tests cover the change. For bug fixes, add a regression
       test that fails on main without the fix. For features, add a
       test that exercises the golden path and at least one edge case.
-- [ ] `CHANGELOG.md` has an entry under `[Unreleased]` describing
-      what changed (one bullet, user-facing language).
+- [ ] **PR title is the release-notes line.** Write it as imperative,
+      user-facing prose. That literal string will appear in the next
+      GitHub Release under the category your label assigns. "Fix
+      sandbox startup on Docker >= 25" ✅ — "fix bug" ❌.
+- [ ] **Apply exactly one category label** (see below). PRs without a
+      label land in the "Other changes" bucket; meta / test-only PRs
+      should use `skip-changelog`.
 - [ ] `pyproject.toml` version is **not** bumped in the PR — version
-      bumps happen on the release branch, not per-PR.
+      bumps happen at release time, not per-PR.
 - [ ] No secrets, credentials, API keys, or customer data in the
       diff. Grep for `api_key`, `password`, `token`, `BEGIN` before
       committing if you're unsure.
 - [ ] Commit messages follow the style below.
+
+### Release-notes labels
+
+Release notes are generated automatically by GitHub from merged-PR
+titles, grouped by label. The config is in
+[`.github/release.yml`](.github/release.yml). Use one of:
+
+| Label | Bucket | When to use |
+|---|---|---|
+| `breaking-change` | ⚠️ Breaking changes | API change, removed flag, required config migration. Can be combined with another label. |
+| `enhancement` or `feature` | 🚀 Features | New user-visible capability. |
+| `bug` | 🐛 Fixes | Fixing a regression or reported defect. |
+| `security` | 🔒 Security | Anything security-sensitive — pairs with a CVE / advisory. |
+| `documentation` | 📚 Docs | Docs-only change. |
+| `chore` | 🧰 Maintenance | Deps, CI, tooling, refactors with no behavior change. |
+| `skip-changelog` | (excluded) | Test-only PRs, meta PRs, trivial follow-ups. |
+
+For all other PRs, there is no longer a `CHANGELOG.md` to update —
+the old hand-curated file is archived at
+[`docs/CHANGELOG-v1.0.md`](docs/CHANGELOG-v1.0.md) and the root
+[`CHANGELOG.md`](CHANGELOG.md) is just a pointer to GitHub Releases.
 
 ## Commit message style
 
