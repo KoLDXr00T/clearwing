@@ -170,13 +170,7 @@ class AsyncLLMClient:
             # blocks, etc.). `normalize_reasoning_content` unifies the
             # varied provider shapes into ChatResponse.reasoning_content,
             # so hunter transcripts see a single string regardless of
-            # backend. `reasoning_effort="medium"` is required alongside
-            # `capture_reasoning_content` to make the Responses adapter
-            # actually emit `reasoning.summary="detailed"` on the request
-            # (rust-genai ropoctl fork patched this to not require both,
-            # but "medium" is a sensible active choice independent of
-            # that — it's a reasonable default effort tier and lets us
-            # still get summaries on older upstreams).
+            # backend.
             capture_reasoning_content=True,
             normalize_reasoning_content=True,
             reasoning_effort=self.reasoning_effort,
