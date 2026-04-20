@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`tests/test_event_bus.py`** — coverage backfill for the
+  `clearwing.core.events.EventBus` introduced by dd5f093: pins down
+  emission ordering (single and multi-subscriber), late-subscriber
+  semantics (no historical backfill — the bus is live pub/sub, not a
+  replay log), and subscriber exception resilience (a raising handler,
+  e.g. a disconnected `/ws/agent` client, must not crash the emitter
+  and must not starve later subscribers). 8 new tests.
 - **`clearwing setup` / `clearwing init`** — interactive provider
   wizard. Menu-driven selection from 10 backends (Anthropic,
   OpenRouter, Ollama, LM Studio, OpenAI, Together, Groq, Fireworks,
