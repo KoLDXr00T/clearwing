@@ -164,6 +164,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   now opt in explicitly with `scan_type="syn"` (or `ScanConfig(scan_type=
   "syn")`), and the scan must still run as root for the raw sockets to
   work.
+- **`genai-pyo3` pinned to `>=0.1.11`**. 0.1.11 exposes reqwest's
+  `timeout` / `connect_timeout` / `read_timeout` on `Client` and
+  defaults the connect-timeout to 30 s. Before this bump, every
+  runtime call through genai-pyo3 was vulnerable to an indefinite
+  hang on a stalled TLS handshake, unresponsive proxy, or transient
+  mid-request drop — `clearwing doctor` was the most visible
+  symptom but every sourcehunt / ranker / hunter call had the same
+  exposure.
+- **`clearwing doctor` — removed the `ThreadPoolExecutor` wrapper
+  around `_invoke_test`**. The 30 s timeout it enforced is now a
+  library-level concern handled by genai-pyo3's default
+  `connect_timeout`, so the worker-thread + `FuturesTimeout`
+  plumbing (and the associated thread-leak-on-timeout behavior)
+  is no longer needed. Doctor returns to a simple try / except
+  around `llm.invoke`.
 - **`clearwing doctor` external-tool probe is now host-OS aware**: on
   macOS it checks for `dtruss` (the DTrace-based syscall tracer that
   ships with the OS) instead of `strace`, which is Linux-only. The
