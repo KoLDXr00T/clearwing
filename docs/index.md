@@ -1,7 +1,9 @@
 # Clearwing
 
-**Autonomous vulnerability scanner and source-code hunter built on
-LangGraph.**
+**Autonomous vulnerability scanner and source-code hunter.** Built on
+`genai-pyo3`, a native Rust-backed LLM runtime speaking every major
+provider (Anthropic, OpenAI, OpenRouter, Ollama, LM Studio, Together,
+Groq, DeepSeek, MiniMax, Gemini, any OpenAI-compatible endpoint).
 
 Clearwing is a dual-mode offensive-security tool:
 
@@ -28,7 +30,7 @@ Clearwing is a dual-mode offensive-security tool:
 | [**LLM providers**](providers.md) | OpenRouter / Ollama / LM Studio / vLLM / Together / Groq / DeepSeek / OpenAI — CLI + env + config.yaml recipes for each |
 | [**Architecture**](architecture.md) | How the ReAct loops, sandboxes, capabilities layer, Finding dataclass, and knowledge graph fit together |
 | [**CLI reference**](cli.md) | Every `clearwing <subcommand>` flag, with examples |
-| [**API reference**](api.md) | `clearwing.findings.Finding`, `clearwing.agent.graph.build_react_graph`, the sourcehunt runner, auto-generated from docstrings |
+| [**API reference**](api.md) | `clearwing.findings.Finding`, the sourcehunt runner, auto-generated from docstrings |
 
 ## Project status
 

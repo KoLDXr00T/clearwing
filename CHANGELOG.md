@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Docs refresh — README + `docs/`**: drop the stale "built on
+  LangGraph" blurb in favor of accurate `genai-pyo3` / rust-genai
+  attribution, remove the "recent Rust toolchain required" install
+  caveat (genai-pyo3 ships prebuilt manylinux / macOS universal2 /
+  windows wheels for Python 3.9–3.13), rewrite `docs/providers.md`
+  Ollama section around the native rust-genai adapter instead of the
+  retired `langchain-ollama` transport, and update `docs/cli.md` +
+  `docs/architecture.md` to reflect the native ReAct runtime and the
+  current optional-extras list (`genai-pyo3`, `playwright`,
+  `sentence-transformers`, `fastapi`, `pymetasploit3`, `chromadb`).
+
 ### Added
 
 - **`clearwing setup` / `clearwing init`** — interactive provider

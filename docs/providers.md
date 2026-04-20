@@ -136,24 +136,44 @@ YAML by hand, quote it so the shell doesn't eat the `$`.
 
 ## Ollama
 
-Two paths: the OpenAI-compatible endpoint (works out of the box,
-no extra install) or the native `langchain-ollama` transport
-(`pip install clearwing[ollama]`, tighter tool-calling semantics on
-some models).
+Ollama is spoken natively by `rust-genai` via its own adapter — no
+extra install, no `/v1` shim needed. You can also point Clearwing at
+Ollama's OpenAI-compatible endpoint if you prefer.
 
-### OpenAI-compat (recommended for most models)
+### Native Ollama adapter (recommended)
 
 ```bash
 # Start Ollama
 ollama serve &
 ollama pull qwen2.5-coder:32b
 
-# Point Clearwing at the /v1 endpoint
+# Point Clearwing at the native Ollama port (no /v1 suffix)
+export CLEARWING_BASE_URL=http://localhost:11434
+export CLEARWING_MODEL=qwen2.5-coder:32b
+# No API key required
+
+clearwing sourcehunt /path/to/repo --depth standard
+```
+
+Or pin it explicitly in `~/.clearwing/config.yaml`:
+
+```yaml
+providers:
+  local_ollama:
+    provider: ollama
+    base_url: http://localhost:11434
+    model: qwen2.5-coder:32b
+
+routes:
+  default: local_ollama
+```
+
+### OpenAI-compat endpoint (alternative)
+
+```bash
 export CLEARWING_BASE_URL=http://localhost:11434/v1
 export CLEARWING_API_KEY=ollama            # placeholder, Ollama ignores it
 export CLEARWING_MODEL=qwen2.5-coder:32b
-
-clearwing sourcehunt /path/to/repo --depth standard
 ```
 
 **Tool calling caveat**: Clearwing requires function calling. Not
@@ -161,26 +181,6 @@ every Ollama-served model handles it well. Known-good models as of
 2026-04: `qwen2.5-coder:32b`, `qwen2.5:72b`, `llama3.3:70b`,
 `mistral-small3:24b`. Base Llama models without function-calling
 training will fail on the first tool dispatch.
-
-### Native transport (optional)
-
-```bash
-pip install clearwing[ollama]
-```
-
-There's no CLI path for "use native" yet — you need the
-`~/.clearwing/config.yaml` form:
-
-```yaml
-providers:
-  local_ollama:
-    provider: ollama                     # forces native langchain-ollama
-    base_url: http://localhost:11434
-    model: qwen2.5-coder:32b
-
-routes:
-  default: local_ollama
-```
 
 ## LM Studio
 

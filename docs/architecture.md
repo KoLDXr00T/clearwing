@@ -41,7 +41,9 @@ bus.
 
 ## The network-pentest agent (`clearwing.agent.graph`)
 
-A LangGraph ReAct loop with 63 bind-tools. The graph has two nodes:
+A native ReAct loop with 63 bind-tools, driven by `clearwing.agent.runtime`
+on top of `clearwing.llm.native.AsyncLLMClient` (the `genai-pyo3` bridge
+to rust-genai). The graph has two nodes:
 
 - **`assistant`** — invokes the LLM with the current state and the
   full tool registry. Emits an AIMessage; detects CTF-style flags in
@@ -60,8 +62,8 @@ A LangGraph ReAct loop with 63 bind-tools. The graph has two nodes:
     through the episodic-memory recorder, the knowledge-graph
     populator, and the state updater.
 
-The loop terminates via the standard LangGraph `tools_condition` —
-when the assistant returns no tool_calls, the graph ends.
+The loop terminates when the assistant returns no tool_calls — the
+runtime's inner while-loop falls out and the graph returns.
 
 ### Capability gating
 

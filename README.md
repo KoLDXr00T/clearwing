@@ -8,8 +8,10 @@ Inspired by Anthropic's Glasswing.
 
 The challenge:  Produce similar results as Glasswing - using models everyone has access to.
 
-**Autonomous vulnerability scanner and source-code hunter built on
-LangGraph.**
+**Autonomous vulnerability scanner and source-code hunter.** Built on
+`genai-pyo3`, a native Rust-backed LLM runtime speaking every major
+provider (Anthropic, OpenAI, OpenRouter, Ollama, LM Studio, Together,
+Groq, DeepSeek, MiniMax, Gemini, any OpenAI-compatible endpoint).
 
 Clearwing is a dual-mode offensive-security tool:
 
@@ -105,10 +107,10 @@ source .venv/bin/activate  # fish: source .venv/bin/activate.fish
 clearwing --help
 ```
 
-Requirements: Python 3.10+, a recent Rust toolchain for the native
-`genai-pyo3` bridge, and optionally Docker for the Kali container and
-sanitizer-image sandbox features. If the install fails with a Rust version
-error, run `rustup update stable`.
+Requirements: Python 3.10+ and optionally Docker for the Kali container
+and sanitizer-image sandbox features. `genai-pyo3` ships as prebuilt
+wheels on PyPI (linux x86_64/aarch64, macOS universal2, windows x86_64,
+Python 3.9–3.13), so no Rust toolchain is needed for installation.
 
 ## Quickstart
 
