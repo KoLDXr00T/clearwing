@@ -223,22 +223,25 @@ class ClearwingApp(App):
 
             try:
                 got_response = False
+                last_msg_count = 0
                 async for event in self._agent_graph.astream(
                     input_msg, self._agent_config, stream_mode="values"
                 ):
                     msgs = event.get("messages", [])
-                    if msgs:
-                        last = msgs[-1]
-                        if (
-                            hasattr(last, "content")
-                            and last.content
-                            and getattr(last, "type", None) == "ai"
-                            and not getattr(last, "tool_calls", None)
-                        ):
-                            text = strip_think_tags(extract_text_content(last.content))
-                            if text:
-                                feed.add_message(text, "success")
-                                got_response = True
+                    if len(msgs) <= last_msg_count:
+                        continue
+                    last_msg_count = len(msgs)
+                    last = msgs[-1]
+                    if (
+                        hasattr(last, "content")
+                        and last.content
+                        and getattr(last, "type", None) == "ai"
+                        and not getattr(last, "tool_calls", None)
+                    ):
+                        text = strip_think_tags(extract_text_content(last.content))
+                        if text:
+                            feed.add_message(text, "success")
+                            got_response = True
 
                 if not got_response:
                     feed.add_message("(no response from agent)", "warning")
@@ -257,23 +260,26 @@ class ClearwingApp(App):
                                 answer = await self._user_input_queue.get()
                                 approved = answer.strip().lower() in ("yes", "y", "approve")
                                 resume_input = Command(resume=approved)
+                                resume_msg_count = 0
                                 async for ev in self._agent_graph.astream(
                                     resume_input, self._agent_config
                                 ):
                                     msgs = ev.get("messages", [])
-                                    if msgs:
-                                        last = msgs[-1]
-                                        if (
-                                            hasattr(last, "content")
-                                            and last.content
-                                            and getattr(last, "type", None) == "ai"
-                                            and not getattr(last, "tool_calls", None)
-                                        ):
-                                            text = strip_think_tags(
-                                                extract_text_content(last.content)
-                                            )
-                                            if text:
-                                                feed.add_message(text, "success")
+                                    if len(msgs) <= resume_msg_count:
+                                        continue
+                                    resume_msg_count = len(msgs)
+                                    last = msgs[-1]
+                                    if (
+                                        hasattr(last, "content")
+                                        and last.content
+                                        and getattr(last, "type", None) == "ai"
+                                        and not getattr(last, "tool_calls", None)
+                                    ):
+                                        text = strip_think_tags(
+                                            extract_text_content(last.content)
+                                        )
+                                        if text:
+                                            feed.add_message(text, "success")
 
             except Exception as exc:
                 logger.exception("Agent loop error")
