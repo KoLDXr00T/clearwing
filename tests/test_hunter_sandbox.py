@@ -205,6 +205,38 @@ class TestHunterSandboxSpawn:
         # Session id was injected into env
         assert kwargs["environment"]["CLEARWING_SESSION_ID"] == "test-session"
 
+    def test_spawn_passes_inline_seccomp_json_not_path(self, temp_repo: Path, mock_docker):
+        """Regression: Docker's Engine API rejects path-form seccomp options
+        (it expects the option string after `seccomp=` to be JSON content).
+        The SDK doesn't read the file client-side the way `docker run` does,
+        so hunter spawns must inline the profile. See hunter_sandbox.py.
+        """
+        import json
+
+        (temp_repo / "Makefile").write_text("all:\n")
+        mock_docker.images.get.return_value = MagicMock()
+        mock_container = MagicMock()
+        mock_container.id = "cid"
+        mock_container.short_id = "cid"
+        mock_docker.containers.run.return_value = mock_container
+
+        sb = HunterSandbox(repo_path=str(temp_repo))
+        sb.build_image()
+        sb.spawn(session_id="seccomp-test", scratch_mount=False)
+
+        kwargs = mock_docker.containers.run.call_args.kwargs
+        sec_opts = kwargs["security_opt"]
+        seccomp_opts = [o for o in sec_opts if o.startswith("seccomp=")]
+        assert len(seccomp_opts) == 1, sec_opts
+        value = seccomp_opts[0][len("seccomp=") :]
+        # Must be parseable JSON, not a filesystem path
+        assert not value.startswith("/"), (
+            f"seccomp option must be inline JSON, not a path: {value[:60]}"
+        )
+        parsed = json.loads(value)
+        assert parsed.get("defaultAction") == "SCMP_ACT_ALLOW"
+        assert any("mount" in rule.get("names", []) for rule in parsed.get("syscalls", []))
+
     def test_spawn_with_scratch_mount(self, temp_repo: Path, mock_docker):
         (temp_repo / "Makefile").write_text("all:\n")
         mock_docker.images.get.return_value = MagicMock()

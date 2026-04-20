@@ -12,11 +12,11 @@ Lifecycle:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
 import tempfile
-from pathlib import Path
 
 from .builders import (
     BuildRecipe,
@@ -25,7 +25,7 @@ from .builders import (
     validate_sanitizer_combo,
 )
 from .container import SandboxConfig, SandboxContainer
-from .seccomp_profiles import write_seccomp_profile
+from .seccomp_profiles import get_seccomp_profile
 
 logger = logging.getLogger(__name__)
 
@@ -225,8 +225,12 @@ class HunterSandbox:
         # Mark the variant so hunter tools can introspect which image is running
         env["CLEARWING_SANITIZER_VARIANT"] = ",".join(chosen)
 
-        build_dir = Path(tempfile.mkdtemp(prefix="clearwing-seccomp-"))
-        seccomp_path = write_seccomp_profile("hunter", build_dir / "seccomp.json")
+        # Docker's Python SDK passes security_opt values directly to the
+        # Engine API, which expects seccomp content to be inline JSON — not
+        # a path (unlike the `docker run` CLI, which reads the file client-
+        # side). Passing a path makes the daemon reject the request with
+        # "Decoding seccomp profile failed: invalid character '/'..."
+        seccomp_json = json.dumps(get_seccomp_profile("hunter"))
 
         cfg = SandboxConfig(
             image=image_tag,
@@ -240,7 +244,7 @@ class HunterSandbox:
             working_dir="/workspace",
             name=None,
             pids_limit=512,
-            security_opt=[f"seccomp={seccomp_path}"],
+            security_opt=[f"seccomp={seccomp_json}"],
             cap_drop=["ALL"],
             cap_add=["SYS_PTRACE"],
             runtime=runtime,
@@ -338,9 +342,7 @@ class HunterSandbox:
 
         post_install_block = ""
         if self.post_install_commands:
-            post_install_block = "\n".join(
-                f"RUN {cmd}" for cmd in self.post_install_commands
-            )
+            post_install_block = "\n".join(f"RUN {cmd}" for cmd in self.post_install_commands)
 
         # Variant header makes the Dockerfile self-documenting so a human
         # inspecting the built image via `docker history` knows what's in it

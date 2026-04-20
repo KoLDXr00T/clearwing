@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sourcehunt sandboxes could not start** on current Docker versions
+  because of two regressions introduced by the spec-013 container
+  hardening commit. Every `HunterPool` file failed with
+  `sandbox_factory failed` before any Hunter could run.
+  1. `HunterSandbox.spawn` passed `security_opt=["seccomp=<path>"]`
+     to the Docker Python SDK, but the Engine API expects the value
+     after `seccomp=` to be inline JSON (unlike the `docker run` CLI,
+     which reads the file client-side). The daemon rejected every
+     start with `Decoding seccomp profile failed: invalid character
+     '/' looking for beginning of value`. Now the profile is inlined
+     directly from `get_seccomp_profile()` via `json.dumps(...)`.
+  2. `SandboxContainer.copy_tree_into` runs `tar xf` inside a
+     container whose capabilities are dropped (`cap_drop=["ALL"]`,
+     only `SYS_PTRACE` added back). Without `CAP_CHOWN`, tar
+     defaults to restoring the archive's uid/gid (host uid 1000),
+     which fails with `Cannot change ownership ... Operation not
+     permitted`. Added `--no-same-owner` to the extract so tar skips
+     chown and files end up owned by the (root) in-container
+     process. Covered by regression tests that assert the inline
+     JSON shape and the `--no-same-owner` flag.
+
 ### Changed
 
 - **Docs refresh — README + `docs/`**: drop the stale "built on

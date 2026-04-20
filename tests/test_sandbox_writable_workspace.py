@@ -87,6 +87,17 @@ class TestCopyTreeInto:
         assert "tar" in tar_call[0][0]
         assert "/tmp/myrepo" in tar_call[0][0]
 
+        # Regression: the extract side must pass --no-same-owner so tar
+        # doesn't try to restore host uid/gid inside a cap-dropped container
+        # (CAP_CHOWN is removed by cap_drop=["ALL"]). Without this flag, tar
+        # aborts with "Cannot change ownership ... Operation not permitted".
+        docker_call = mock_popen.call_args_list[1]
+        docker_argv = docker_call[0][0]
+        assert "docker" in docker_argv[0]
+        assert "--no-same-owner" in docker_argv, (
+            f"extract tar must use --no-same-owner: {docker_argv}"
+        )
+
     def test_copy_tree_into_before_start_raises(self):
         cfg = SandboxConfig(image="alpine:latest")
         sb = SandboxContainer(cfg)

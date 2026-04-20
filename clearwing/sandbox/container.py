@@ -57,9 +57,7 @@ class SandboxConfig:
     cap_add: list[str] = field(default_factory=lambda: ["SYS_PTRACE"])
     read_only_rootfs: bool = False
     runtime: str | None = None
-    labels: dict[str, str] = field(
-        default_factory=lambda: {"managed-by": "clearwing"}
-    )
+    labels: dict[str, str] = field(default_factory=lambda: {"managed-by": "clearwing"})
 
 
 class SandboxContainer:
@@ -278,8 +276,25 @@ class SandboxContainer:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        # `--no-same-owner` — the extract happens inside a container whose
+        # caps are dropped (cap_drop=["ALL"], no CAP_CHOWN), so any attempt
+        # to restore the host uid/gid from the archive fails with
+        # "Cannot change ownership ... Operation not permitted" and aborts
+        # the extract. Telling tar not to chown makes files owned by the
+        # (root) process running the extract, which is what we want anyway.
         docker_proc = subprocess.Popen(
-            ["docker", "exec", "-i", cid, "tar", "xf", "-", "-C", container_path],
+            [
+                "docker",
+                "exec",
+                "-i",
+                cid,
+                "tar",
+                "xf",
+                "-",
+                "--no-same-owner",
+                "-C",
+                container_path,
+            ],
             stdin=tar_proc.stdout,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -291,13 +306,13 @@ class SandboxContainer:
         duration = time.monotonic() - start_time
         if docker_proc.returncode != 0:
             err = (docker_stderr or b"").decode("utf-8", errors="replace")
-            logger.warning(
-                "copy_tree_into failed (rc=%d): %s", docker_proc.returncode, err[:500]
-            )
+            logger.warning("copy_tree_into failed (rc=%d): %s", docker_proc.returncode, err[:500])
             raise RuntimeError(f"copy_tree_into failed: {err[:500]}")
         logger.debug(
             "copy_tree_into %s → %s completed in %.1fs",
-            host_path, container_path, duration,
+            host_path,
+            container_path,
+            duration,
         )
 
     def stop(self) -> None:
