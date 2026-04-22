@@ -32,6 +32,15 @@ def _get_proxy_tools() -> list[Any]:
         return []
 
 
+def _get_webcrypto_tools() -> list[Any]:
+    try:
+        from .recon.webcrypto_hooks import get_webcrypto_tools
+
+        return get_webcrypto_tools()
+    except ImportError:
+        return []
+
+
 def _get_analysis_tools() -> list[Any]:
     try:
         from .data.analysis_tools import analyze_source, clone_and_analyze, trace_taint_flows
@@ -100,6 +109,7 @@ def get_all_tools() -> list[Any]:
 
     tools.extend(_get_browser_tools())
     tools.extend(_get_proxy_tools())
+    tools.extend(_get_webcrypto_tools())
     tools.extend(_get_analysis_tools())
     tools.extend(get_mcp_tools())
     tools.extend(get_exploit_search_tools())
