@@ -1,4 +1,4 @@
-# 1Password $1M CTF — Clearwing Assessment & Plan
+# 1Password $1M CTF — Clearwing Runbook
 
 ## 1. CTF Goals
 
@@ -28,7 +28,7 @@ At least one of the following must fail for the flag to be recoverable:
 
 | Layer | Protection | What a break looks like |
 |-------|-----------|------------------------|
-| **Authentication** | SRP-6a + 2SKD (account password × Secret Key) | Bypass or forge SRP verifier; recover both secrets; exploit protocol flaw |
+| **Authentication** | SRP-6a + 2SKD (account password x Secret Key) | Bypass or forge SRP verifier; recover both secrets; exploit protocol flaw |
 | **Key derivation** | PBKDF2-HMAC-SHA256 (100k+ iterations) + 128-bit Secret Key XOR | Reduce keyspace; side-channel leak of derived key; skip KDF entirely |
 | **Vault encryption** | AES-256-GCM per-item, keys wrapped by personal keyset | Recover AUK or vault key; forge AEAD tag; exploit key hierarchy |
 | **Transport** | TLS 1.3 + HSTS | MITM; downgrade; certificate substitution |
@@ -41,673 +41,736 @@ acknowledges weaknesses in several of these layers. Those are the most
 productive starting points.
 
 
-## 2. Existing Clearwing Features That Apply
+## 2. Clearwing Toolchain
 
-### 2.1 Browser Automation (recon/browser_tools)
+All tools referenced in the runbook below. Organized by attack domain.
 
-**Relevance: HIGH** — the web client is the #1 acknowledged attack surface.
+### 2.1 Reconnaissance & Browser
 
-Playwright-based headless Chromium with:
-- `browser_navigate` / `browser_get_html` / `browser_get_content` — load the
-  login page, extract the full JavaScript bundle, map the authentication flow
-- `browser_execute_js` — execute arbitrary JavaScript in the page context to:
-  - Hook `SubtleCrypto` (`crypto.subtle.importKey`, `deriveBits`, `encrypt`,
-    `decrypt`) and log every call with arguments
-  - Intercept the SRP handshake values (A, B, M1, M2, salt, iteration count)
-  - Inspect IndexedDB / localStorage for cached key material
-  - Monkey-patch the fetch/XHR layer to log all API traffic with bodies
-- `browser_get_cookies` / `browser_set_cookie` — extract session tokens, test
-  session fixation, inject modified auth state
-- `browser_fill` / `browser_click` — automate the login flow end-to-end
+| Tool | Module | Purpose |
+|------|--------|---------|
+| `browser_navigate` | `recon/browser_tools` | Load pages, extract JS bundles |
+| `browser_execute_js` | `recon/browser_tools` | Run arbitrary JS in page context |
+| `browser_get_html` | `recon/browser_tools` | Extract full page source |
+| `browser_get_cookies` | `recon/browser_tools` | Extract session tokens |
+| `browser_fill` / `browser_click` | `recon/browser_tools` | Automate login flow |
+| `proxy_request` | `recon/proxy_tools` | Crafted HTTP requests to API endpoints |
+| `proxy_replay` | `recon/proxy_tools` | Replay captured requests with modifications |
+| `scan_ports` | `scan/scanner_tools` | Port enumeration |
+| `detect_services` | `scan/scanner_tools` | Service fingerprinting |
+| `scan_vulnerabilities` | `scan/scanner_tools` | NVD cross-reference |
+| `search_cves` | `meta/reporting_tools` | CVE database search |
 
-**Limitations:** Output truncated to 10k chars. Requires human approval for JS
-execution. No persistent browser profile across sessions.
+### 2.2 TLS & Transport
 
-### 2.2 HTTP Proxy (recon/proxy_tools)
+| Tool | Module | Purpose |
+|------|--------|---------|
+| `scan_tls_config` | `scan/tls_tools` | Protocol version, cipher suite, certificate chain |
+| `enumerate_cipher_suites` | `scan/tls_tools` | Full cipher suite enumeration with weakness flags |
+| `test_tls_downgrade` | `scan/tls_tools` | TLS 1.0/1.1/SSL3 downgrade and POODLE/DROWN/FREAK checks |
+| `inspect_certificate` | `scan/tls_tools` | Deep cert analysis: key strength, CT logs, pinning |
+| `mitm_start` | `recon/mitm_proxy` | Start intercepting TLS proxy with dynamic certs |
+| `mitm_set_intercept_rule` | `recon/mitm_proxy` | Drop, delay, or modify requests in flight |
+| `mitm_get_decrypted_traffic` | `recon/mitm_proxy` | Query decrypted API traffic log |
+| `mitm_inject_response` | `recon/mitm_proxy` | Serve tampered JS bundles or fake public keys |
 
-**Relevance: MEDIUM** — useful for API-level probing, not for TLS interception.
+### 2.3 SRP Protocol
 
-- `proxy_request` — send crafted HTTP requests to 1Password API endpoints;
-  enumerate `/api/v*` routes; probe for IDOR, authz bypass, or undocumented
-  endpoints
-- `proxy_replay` — capture a legitimate SRP handshake then replay with modified
-  parameters (malformed A value, zero-value SRP parameters, truncated proofs)
-- `proxy_get_history` / `proxy_export_history` — review all API traffic for
-  patterns, timing differences, or information leakage
+| Tool | Module | Purpose |
+|------|--------|---------|
+| `srp_handshake` | `crypto/srp_tools` | Full SRP-6a auth with all intermediate values |
+| `srp_fuzz_parameters` | `crypto/srp_tools` | Zero-key attacks (A=0, A=N, A=2N), malformed proofs |
+| `srp_extract_verifier_info` | `crypto/srp_tools` | Extract salt, iterations, group params; username enumeration |
+| `srp_timing_attack` | `crypto/srp_tools` | Statistical timing analysis of auth stages |
 
-**Limitations:** Not a true intercepting proxy — uses `urllib.request`, not a
-MITM setup. Cannot decrypt TLS. Cannot inspect certificate chains. Cannot
-perform SSL stripping. Far weaker than Burp Suite or mitmproxy for protocol
-analysis.
+### 2.4 Key Derivation & 2SKD
 
-### 2.3 Source Code Hunter (sourcehunt/)
+| Tool | Module | Purpose |
+|------|--------|---------|
+| `analyze_kdf_parameters` | `crypto/kdf_tools` | Extract and assess KDF config vs OWASP minimums |
+| `benchmark_kdf_cracking` | `crypto/kdf_tools` | Cracking cost estimate at GPU tiers |
+| `test_2skd_implementation` | `crypto/kdf_tools` | Verify Secret Key XOR, AUK/SRP-x split correctness |
+| `kdf_oracle_test` | `crypto/kdf_tools` | Timing/response oracle leaks in KDF validation |
+| `analyze_2skd_entropy` | `crypto/credential_tools` | Combined keyspace calculation (password x Secret Key) |
+| `test_secret_key_validation` | `crypto/credential_tools` | Factor separation: does the server distinguish wrong-password from wrong-key? |
+| `enumerate_secret_key_format` | `crypto/credential_tools` | Secret Key structure, entropy, predictable components |
+| `offline_crack_setup` | `crypto/credential_tools` | Generate hashcat/john commands for captured material |
 
-**Relevance: MEDIUM** — conditional on open-source components being in scope.
+### 2.5 Vault Encryption
 
-1Password has several public repositories. The sourcehunt pipeline can:
-- Clone, preprocess, and rank files by attack surface and attacker reachability
-- Deploy the `crypto_primitive` specialist hunter to look for timing side
-  channels, nonce reuse, key lifecycle failures, MAC-before-decrypt, weak PRNG
-- Adversarially verify findings; generate and validate PoCs in sandboxed
-  containers with ASan/UBSan
-- Run variant detection to find the same bug class across the codebase
+| Tool | Module | Purpose |
+|------|--------|---------|
+| `parse_vault_blob` | `crypto/vault_tools` | Parse encrypted item structure (IV, tag, key ID) |
+| `analyze_key_hierarchy` | `crypto/vault_tools` | Map AUK -> keyset -> vault key -> item key chain |
+| `test_aead_integrity` | `crypto/vault_tools` | Bit-flip, truncation, tag substitution attacks |
+| `key_wrap_analysis` | `crypto/vault_tools` | AES-KW / RSA-OAEP wrapping analysis, padding oracle test |
 
-The hunter's system prompt already includes detailed guidance for:
-- Timing side channels (`memcmp`/`strcmp` on secrets → CWE-208)
-- IV/nonce reuse (static IVs for AES-GCM → CWE-323)
-- Key lifecycle (no `memset_s`/`explicit_bzero` → CWE-327)
-- MAC verification order (MAC after decrypt → padding oracle → CWE-354)
-- Weak PRNG (`rand()`/`random()` for key material → CWE-338)
-- Elliptic curve errors (incomplete point validation, twist attacks → CWE-327)
+### 2.6 Timing & Side Channels
 
-### 2.4 Kali Docker Container (ops/kali_docker_tool)
+| Tool | Module | Purpose |
+|------|--------|---------|
+| `timing_probe` | `crypto/timing_tools` | Nanosecond-precision request timing with statistics |
+| `timing_compare` | `crypto/timing_tools` | Welch's t-test between two request distributions |
+| `timing_bitwise_probe` | `crypto/timing_tools` | Byte-at-a-time timing attack |
 
-**Relevance: MEDIUM** — provides the full offensive toolchain.
+### 2.7 WebCrypto & Auth Flow Capture
 
-- `nmap` with NSE scripts for TLS cipher suite enumeration (`ssl-enum-ciphers`)
-  and certificate analysis
-- `testssl.sh` for comprehensive TLS configuration audit
-- `hashcat` / `john` for offline cracking if key material or hashes are captured
-- `openssl s_client` for manual TLS handshake inspection
-- `sqlmap`, `nikto`, `dirb` for web application scanning
-- Compile and run custom C/Python exploit code
+| Tool | Module | Purpose |
+|------|--------|---------|
+| `install_webcrypto_hooks` | `recon/webcrypto_hooks` | Instrument all SubtleCrypto methods |
+| `get_webcrypto_log` | `recon/webcrypto_hooks` | Retrieve captured crypto operations |
+| `extract_srp_values` | `recon/webcrypto_hooks` | Parse SRP handshake from crypto log |
+| `extract_key_hierarchy` | `recon/webcrypto_hooks` | Reconstruct key derivation chain from crypto log |
+| `start_auth_recording` | `recon/auth_recorder` | Unified capture: browser + proxy + crypto + timing |
+| `stop_auth_recording` | `recon/auth_recorder` | Stop recording and return AuthFlowRecord |
+| `diff_auth_flows` | `recon/auth_recorder` | Compare two auth flows for differential analysis |
 
-**Limitations:** Requires human approval for every command. No pre-built SRP or
-PBKDF2 attack modules — the attacker must supply the logic.
+### 2.8 Source Analysis & Exploit
 
-### 2.5 Network Scanning (scan/)
+| Tool | Module | Purpose |
+|------|--------|---------|
+| `hunt_source_code` | `meta/sourcehunt_tools` | Clone, rank, and hunt public repos for crypto bugs |
+| `create_custom_tool` | `ops/dynamic_tool_creator` | Write custom Python attack tools at runtime |
+| `kali_setup` / `kali_execute` | `ops/kali_docker_tool` | Full Kali toolchain (hashcat, nmap, testssl.sh) |
+| `search_exploit_db` | `exploit/exploit_search` | Exploit-DB and NVD search |
 
-**Relevance: LOW-MEDIUM** — infrastructure reconnaissance.
+### 2.9 Knowledge & Reporting
 
-- `scan_ports` — enumerate open ports on the CTF infrastructure
-- `detect_services` — banner grab and fingerprint server software versions
-- `scan_vulnerabilities` — cross-reference detected services against NVD
-- `detect_os` — TTL-based OS fingerprinting
+| Tool | Module | Purpose |
+|------|--------|---------|
+| `query_knowledge_graph` | `data/knowledge_tools` | Query the crypto-aware knowledge graph |
+| `store_knowledge` / `search_knowledge` | `data/memory_tools` | Persist and recall findings across sessions |
+| `generate_report` / `save_report` | `meta/reporting_tools` | Compile HackerOne submission |
+| `load_skills` | `ops/skill_tools` | Load crypto attack methodology playbooks |
 
-Useful for initial recon but unlikely to find the path to the flag directly.
+### 2.10 Crypto Skill Pack
 
-### 2.6 Knowledge Graph (data/knowledge/)
+Pre-built attack methodology playbooks in `clearwing/core/skills/crypto/`:
 
-**Relevance: MEDIUM** — attack surface mapping and progress tracking.
-
-NetworkX-backed graph that tracks targets → ports → services → CVEs → exploits
-with persistence across sessions. Useful for maintaining situational awareness
-across a long-running CTF engagement.
-
-### 2.7 CTF Flag Detection (agent/runtime)
-
-**Relevance: LOW** — convenience feature.
-
-Automatic regex matching for `flag{...}`, `CTF{...}`, `HTB{...}`, and 32-char
-hex patterns. Will auto-capture the flag if it appears in any tool output. The
-1Password flag is described as "bad poetry" — may not match standard patterns.
-
-### 2.8 Dynamic Tool Creation (ops/dynamic_tool_creator)
-
-**Relevance: HIGH** — fills gaps by letting the agent write custom attack tools
-at runtime.
-
-`create_custom_tool` generates new Python async functions on the fly with access
-to `asyncio`, `json`, `re`, `socket`, `subprocess`. The agent can write
-protocol-specific fuzzing tools, custom API clients, or SRP parameter
-manipulation scripts without leaving the loop.
-
-### 2.9 Exploit Search (exploit/exploit_search)
-
-**Relevance: LOW** — searches Exploit-DB and NVD for prior art against 1Password
-or its dependencies. Unlikely to yield direct results for the CTF but worth
-running for completeness.
+| Skill | Coverage |
+|-------|----------|
+| `srp_attacks` | Zero-key, parameter manipulation, verifier theft, session key recovery |
+| `kdf_analysis` | OWASP compliance, iteration count assessment, 2SKD verification |
+| `timing_attacks` | Network timing methodology, drift cancellation, statistical rigor |
+| `aead_misuse` | AES-GCM nonce reuse, tag forgery, associated data omission |
+| `key_hierarchy` | Key wrapping attacks, derivation chain analysis, padding oracles |
+| `padding_oracle` | CBC padding oracle exploitation methodology |
+| `tls_assessment` | TLS configuration testing, downgrade detection, cert analysis |
 
 
-## 3. High-Level Attack Plan
+## 3. Runbook
+
+Step-by-step procedures for the CTF engagement. Each step specifies the tools to
+use, what to look for, and decision branches based on results.
 
 ### Phase 1: Reconnaissance
 
-1. **Infrastructure scan** — `scan_ports` + `detect_services` + `detect_os` on
-   `bugbounty-ctf.1password.com` to map the network surface.
-2. **TLS audit** — Kali container running `testssl.sh` and `nmap --script
-   ssl-enum-ciphers` to identify supported cipher suites, TLS versions,
-   certificate details, and potential downgrade paths.
-3. **Web client extraction** — `browser_navigate` + `browser_get_html` to
-   download the full JavaScript bundle. Identify the SRP library, key derivation
-   parameters, encryption routines, and API endpoint paths.
-4. **API enumeration** — `proxy_request` to systematically probe API routes:
-   `/api/v1/auth`, `/api/v1/vaults`, `/api/v1/items`, and undocumented paths.
-   Map request/response schemas, required headers, and error behavior.
-5. **Public source analysis** — `hunt_source_code` against 1Password's public
-   GitHub repositories to find crypto implementation bugs.
-6. **CVE/exploit search** — `search_exploit_db` + `search_cves` for 1Password,
-   SRP, PBKDF2, and WebCrypto-related vulnerabilities.
+Goal: map the attack surface before touching any crypto.
+
+#### Step 1.1 — Infrastructure Scan
+
+```
+scan_ports(target="bugbounty-ctf.1password.com")
+detect_services(target="bugbounty-ctf.1password.com")
+```
+
+**Look for:** Open ports beyond 443. Non-standard services. Server software
+versions with known CVEs.
+
+**If unusual ports found:** Run `scan_vulnerabilities` and `search_cves` against
+detected services. Document in knowledge graph.
+
+**If only 443:** Expected. Move to TLS audit.
+
+#### Step 1.2 — TLS Configuration Audit
+
+```
+scan_tls_config(target="bugbounty-ctf.1password.com", port=443)
+enumerate_cipher_suites(target="bugbounty-ctf.1password.com", port=443)
+test_tls_downgrade(target="bugbounty-ctf.1password.com", port=443)
+inspect_certificate(target="bugbounty-ctf.1password.com", port=443)
+```
+
+**Look for:**
+- TLS 1.0/1.1 still accepted (downgrade path)
+- Weak cipher suites (RC4, DES, export-grade, NULL)
+- Certificate chain issues (weak key, missing intermediate, expired)
+- Missing HSTS or short max-age
+- OCSP stapling disabled
+
+**If downgrade possible:** Flag as finding. Test POODLE/BEAST applicability via
+Kali: `kali_execute(command="testssl.sh --vulnerable bugbounty-ctf.1password.com")`.
+
+**If TLS is clean:** Expected for 1Password. Document and move on.
+
+#### Step 1.3 — Web Client Extraction
+
+```
+browser_navigate(url="https://bugbounty-ctf.1password.com")
+browser_get_html()
+```
+
+**Extract:**
+- All JavaScript bundle URLs (look for webpack chunks, main bundle)
+- API endpoint base paths
+- SRP library identification (look for `srp`, `bigint`, modular exponentiation)
+- Content Security Policy headers
+- Service worker registrations
+- Subresource Integrity (SRI) hashes
+
+**Save the full JS bundle** — it contains the client-side crypto implementation.
+This is the primary artifact for Phase 2.
+
+#### Step 1.4 — API Enumeration
+
+```
+proxy_request(url="https://bugbounty-ctf.1password.com/api/v1/auth", method="POST",
+              body={"email": "test@example.com"})
+proxy_request(url="https://bugbounty-ctf.1password.com/api/v2/auth", method="POST",
+              body={"email": "test@example.com"})
+```
+
+Probe systematically:
+- `/api/v1/auth` — SRP init endpoint
+- `/api/v1/auth/verify` — SRP verify endpoint
+- `/api/v1/auth/enroll` — enrollment (key generation)
+- `/api/v1/vaults` — vault listing
+- `/api/v1/items` — item access
+- `/api/v2/*` — check for API version differences
+- `/.well-known/` — OpenID, security.txt, change-password
+
+**Look for:**
+- Endpoints that respond without authentication
+- Verbose error messages that leak internal structure
+- Rate limiting behavior (or lack thereof)
+- CORS misconfiguration
+- Different behavior between API versions
+
+#### Step 1.5 — Public Source Analysis
+
+```
+hunt_source_code(target="https://github.com/1Password", specialist="crypto_primitive")
+```
+
+Repositories to prioritize:
+- `srp` implementations in any language
+- Client SDK code (browser, CLI)
+- Key derivation libraries
+- Anything referencing `2SKD`, `Secret Key`, or `Account Unlock Key`
+
+**Look for:** Timing-unsafe comparisons on secrets (`memcmp`), nonce reuse,
+missing point validation, key material in logs.
+
+#### Step 1.6 — CVE / Exploit Search
+
+```
+search_cves(query="1Password")
+search_cves(query="SRP-6a")
+search_cves(query="PBKDF2 side channel")
+search_exploit_db(query="1password")
+```
+
+Low probability of direct hits, but establishes baseline awareness of known
+weakness classes.
+
 
 ### Phase 2: Protocol Analysis
 
-7. **SRP handshake capture** — `browser_execute_js` to hook the SRP client and
-   log: username, salt, iteration count, group parameters (N, g), ephemeral
-   values (A, B), proofs (M1, M2), and the session key.
-8. **SRP parameter validation** — `proxy_replay` to send edge-case SRP values:
-   - A = 0 (classic SRP zero-key attack)
-   - A = N (reduces shared secret to zero)
-   - A = k*N (multiples of the modulus)
-   - Truncated or malformed proofs
-   - Invalid salt values
-9. **Key derivation inspection** — `browser_execute_js` to hook
-   `crypto.subtle.deriveBits` and extract: algorithm, iteration count, salt,
-   key length. Verify whether the Secret Key XOR step (2SKD) is correctly
-   applied client-side.
-10. **WebCrypto API hooking** — instrument `crypto.subtle.encrypt`,
-    `crypto.subtle.decrypt`, `crypto.subtle.importKey` to observe key material
-    flowing through the browser's crypto stack.
+Goal: understand and instrument the authentication protocol. Capture every
+intermediate value.
+
+#### Step 2.1 — Record a Baseline Auth Flow
+
+Start the MITM proxy, install WebCrypto hooks, then record a full auth attempt:
+
+```
+mitm_start(listen_port=8443, upstream_target="bugbounty-ctf.1password.com")
+start_auth_recording(target="https://bugbounty-ctf.1password.com",
+                     credentials={"email": "...", "password": "...", "secret_key": "..."},
+                     enable_webcrypto=True, enable_proxy=True)
+```
+
+Wait for login to complete (or fail), then:
+
+```
+stop_auth_recording()
+```
+
+**The AuthFlowRecord captures:**
+- Every HTTP request/response in the auth sequence, with decrypted bodies
+- Every `crypto.subtle` call (deriveBits, importKey, encrypt, decrypt) with
+  arguments and timing
+- SRP handshake values: salt, iterations, A, B, M1, M2
+- KDF parameters: algorithm, iteration count, salt, output length
+- Session tokens and cookies produced
+
+**This is the most important artifact in the engagement.** All subsequent
+analysis references it.
+
+#### Step 2.2 — Extract and Validate SRP Parameters
+
+From the captured flow, or directly:
+
+```
+srp_extract_verifier_info(target="https://bugbounty-ctf.1password.com/api/v1/auth",
+                          username="ctf-account-email")
+```
+
+**Record:**
+- Salt (hex)
+- Iteration count
+- SRP group (N, g) — which RFC group?
+- Algorithm (PBKDF2-HMAC-SHA256 expected)
+- Server's ephemeral B value
+
+```
+analyze_kdf_parameters(target="bugbounty-ctf.1password.com",
+                       algorithm="PBKDF2-HMAC-SHA256",
+                       iterations=<from_above>,
+                       salt_hex="<from_above>")
+```
+
+**Decision:** If iterations < OWASP minimum (600,000 for SHA-256), flag as
+weakness. If salt is static or predictable, flag. Otherwise, KDF is likely
+correctly parameterized.
+
+#### Step 2.3 — Analyze 2SKD Strength
+
+```
+analyze_2skd_entropy(password_entropy_bits=40.0, secret_key_bits=128,
+                     iterations=<from_above>)
+```
+
+**Expected result:** Combined entropy ~168 bits. Brute force infeasible at any
+GPU budget. This establishes the baseline — the tools below test whether the
+*implementation* matches this theoretical strength.
+
+```
+enumerate_secret_key_format(target="https://bugbounty-ctf.1password.com",
+                            username="ctf-account-email")
+```
+
+**Look for:**
+- Predictable prefix (A3 is the version — is it always A3?)
+- Reduced charset (33 chars, not full base-36)
+- Sequential or time-based components
+- Server-side leakage of format info in error messages
+
+#### Step 2.4 — Test Factor Separation (Critical)
+
+This is the highest-value test in the credential analysis suite. If the server
+distinguishes "wrong password" from "wrong Secret Key," each factor can be
+attacked independently — collapsing 168 bits to max(40, 128).
+
+```
+test_secret_key_validation(
+    target="https://bugbounty-ctf.1password.com/api/v1/auth",
+    username="ctf-account-email",
+    password="known-password",
+    secret_key="A3-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX",
+    samples=50,
+    warmup=10,
+    outlier_method="iqr"
+)
+```
+
+**Separation signals to watch:**
+- **Timing**: Statistically significant difference (Welch's t-test p < 0.05,
+  Cohen's d > 0.5) between wrong-password and wrong-key response times
+- **Response body**: Different error messages or error codes
+- **HTTP status**: Different status codes for the two failure modes
+
+**If factor separation detected:** This is a critical finding. File immediately.
+The server must validate both factors simultaneously — any separation breaks
+the 2SKD security model. Proceed to Step 3.6 for independent factor attacks.
+
+**If no separation:** Good implementation. Move to SRP protocol attacks.
+
+#### Step 2.5 — Differential Auth Flow Analysis
+
+Record a second auth flow with a deliberate change (wrong password):
+
+```
+start_auth_recording(target="https://bugbounty-ctf.1password.com",
+                     credentials={"email": "...", "password": "WRONG", "secret_key": "..."},
+                     enable_webcrypto=True, enable_proxy=True)
+# ... wait for failure ...
+stop_auth_recording()
+```
+
+Then compare:
+
+```
+diff_auth_flows(flow_a="<baseline_record>", flow_b="<wrong_password_record>")
+```
+
+**Look for:**
+- Which step diverges first? (Should be SRP verify, not init)
+- Does the server compute differently for wrong vs. right password?
+- Are there extra round trips in one flow but not the other?
+- Do client-side crypto operations differ? (If so, the client may be leaking
+  information about which factor failed)
+
+Repeat with wrong Secret Key, valid password — compare all three.
+
+#### Step 2.6 — WebCrypto Deep Inspection
+
+If not already captured via auth recording:
+
+```
+install_webcrypto_hooks(tab_name="1password-ctf")
+browser_navigate(url="https://bugbounty-ctf.1password.com")
+# Perform login
+get_webcrypto_log(tab_name="1password-ctf")
+extract_srp_values(tab_name="1password-ctf")
+extract_key_hierarchy(tab_name="1password-ctf")
+```
+
+**Map the complete key chain:**
+1. Password + Secret Key -> PBKDF2 -> 64-byte derived key
+2. Derived key split: first 32 bytes = AUK, last 32 bytes = SRP-x
+3. AUK decrypts personal keyset (AES-GCM)
+4. Keyset contains vault symmetric keys (AES-KW wrapped)
+5. Vault keys decrypt individual items (AES-256-GCM)
+
+**Look for:**
+- Is the Secret Key XOR applied *after* PBKDF2? (Correct)
+- Is the split at exactly byte 32? (Verify)
+- Are there any intermediate keys stored in localStorage/IndexedDB?
+- Does the client cache derived keys across sessions?
+- Any `exportKey` calls that expose raw key material?
+
 
 ### Phase 3: Attack Execution
 
-11. **Server-side logic bugs** — test for:
-    - IDOR on vault/item endpoints (substitute vault IDs, item IDs)
-    - Authorization bypass (access CTF vault items with a different account's
-      session)
-    - Race conditions in vault sharing / key distribution
-    - API parameter pollution or type confusion
-12. **Public key substitution** — the white paper acknowledges no user-to-user
-    public key verification (Appendix A.3). Test whether the server can be
-    induced to serve a substitute public key for vault sharing operations.
-13. **Recovery group exploitation** — if the CTF account has recovery groups
-    configured, test whether recovery flows leak key material or allow
-    unauthorized keyset replacement.
-14. **Web client tampering** — analyze the JavaScript for:
-    - DOM-based XSS that could leak decrypted vault contents
-    - Service worker manipulation
-    - Cache poisoning of the JavaScript bundle
-    - PostMessage handler vulnerabilities
-15. **Timing side channels** — measure response times for authentication
-    attempts to detect information leakage about username validity, password
-    correctness, or Secret Key structure.
+Goal: systematically test each attack class. Start with highest-probability
+paths.
 
-### Phase 4: Exploit Development & Validation
+#### Step 3.1 — SRP Zero-Key Attack
 
-16. **Custom tooling** — `create_custom_tool` or Kali container to build
-    targeted exploits for any discovered weakness.
-17. **PoC development** — document the full attack chain from initial access to
-    flag recovery.
-18. **Report generation** — compile findings, evidence, and reproduction steps
-    for HackerOne submission.
-
-
-## 4. Features to Add to Clearwing
-
-The following capabilities are missing from Clearwing and would substantially
-improve its effectiveness against cryptographic protocol targets like 1Password.
-
-### 4.1 TLS Inspection & Analysis Suite
-
-**Gap:** Clearwing has no ability to inspect TLS handshakes, enumerate cipher
-suites, validate certificate chains, or detect downgrade vulnerabilities. The
-proxy tools use `urllib.request` — they cannot intercept encrypted traffic.
-
-**Design:**
+The classic SRP implementation bug. If the server doesn't validate `A % N != 0`,
+the shared secret becomes deterministic regardless of the password.
 
 ```
-clearwing/agent/tools/scan/tls_tools.py
+load_skills(skill_name="srp_attacks")
+srp_fuzz_parameters(
+    target="https://bugbounty-ctf.1password.com/api/v1/auth",
+    username="ctf-account-email",
+    test_vectors=[
+        {"A": "0"},
+        {"A": "<N_hex>"},
+        {"A": "<2N_hex>"},
+        {"A": "<kN_hex>"}
+    ]
+)
 ```
 
-New tool module with:
+**If the server accepts A=0 and returns M2:**
+1. Compute `K = H(0)` — the session key is now known
+2. Use K to authenticate and retrieve encrypted vault data
+3. The vault is still encrypted, but you have a valid session
+4. Proceed to vault key recovery via the key hierarchy
 
-- **`scan_tls_config(target, port)`** — Connect with `ssl.SSLSocket`, negotiate
-  handshake, return: protocol version, cipher suite, key exchange algorithm,
-  certificate chain (issuer, subject, SAN, expiry, key size, signature
-  algorithm), OCSP stapling status, HSTS header presence.
+**Expected result:** Server rejects. 1Password almost certainly validates A.
+But this test takes seconds and the payoff is total compromise, so always run it.
 
-- **`enumerate_cipher_suites(target, port)`** — Iterate over all cipher suites
-  attempting connection with each. Return supported vs. rejected, ordered by
-  server preference. Flag weak suites (RC4, DES, export-grade, NULL).
-
-- **`test_tls_downgrade(target, port)`** — Attempt connections at TLS 1.0, 1.1,
-  1.2, 1.3 and SSL 3.0. Report which versions are accepted. Test for
-  POODLE, DROWN, FREAK, Logjam conditions.
-
-- **`inspect_certificate(target, port)`** — Deep certificate analysis: key
-  strength, chain completeness, CT log presence, pinning headers, known
-  revocation.
-
-**Dependencies:** `ssl` (stdlib), `cryptography` (for certificate parsing).
-
-**Knowledge graph integration:** New entity types `tls_version`,
-`cipher_suite`, `certificate` with relationships `USES_CIPHER`,
-`PRESENTS_CERT`, `VULNERABLE_TO_DOWNGRADE`.
-
-### 4.2 SRP Protocol Testing Framework
-
-**Gap:** Clearwing has zero SRP capabilities — no client implementation, no
-parameter manipulation, no protocol-level fuzzing.
-
-**Design:**
+#### Step 3.2 — SRP Timing Analysis
 
 ```
-clearwing/agent/tools/crypto/srp_tools.py
-clearwing/crypto/srp.py              # Pure-Python SRP-6a implementation
+srp_timing_attack(
+    target="https://bugbounty-ctf.1password.com/api/v1/auth",
+    username="ctf-account-email",
+    samples=100,
+    warmup=10
+)
 ```
 
-Core library (`srp.py`):
+**Look for timing differences in:**
+- Username lookup (valid vs. invalid email) — user enumeration
+- Password verification stage (partially correct vs. fully wrong)
+- M1 proof validation (correct prefix bytes vs. random)
 
-- Full SRP-6a client implementation: generate ephemeral keypair (a, A),
-  compute session key S and proof M1, verify server proof M2.
-- Parameterized: configurable group (N, g), hash function, KDF.
-- Instrumented: every intermediate value logged for analysis.
-
-Agent tools (`srp_tools.py`):
-
-- **`srp_handshake(target, username, password, secret_key)`** — Execute a
-  complete SRP authentication against the target, returning all intermediate
-  values and the session key.
-
-- **`srp_fuzz_parameters(target, username, test_vectors)`** — Send malformed
-  SRP values:
-  - A = 0, A = N, A = 2N (zero-key attacks)
-  - Truncated/oversized salt
-  - Wrong group parameters
-  - Malformed M1 proof
-  Report server responses and detect improper validation.
-
-- **`srp_extract_verifier_info(target, username)`** — Probe the server to
-  extract: salt, iteration count, group parameters. Measure response
-  differences between valid and invalid usernames.
-
-- **`srp_timing_attack(target, username, samples)`** — Send N authentication
-  attempts with controlled inputs, measure response latency at microsecond
-  precision. Statistical analysis for timing leaks in username lookup, password
-  verification, or proof validation.
-
-**Dependencies:** `gmpy2` or Python `pow()` with modular exponentiation for
-big-integer SRP math.
-
-### 4.3 Key Derivation Function Analysis Tools
-
-**Gap:** No tools to analyze PBKDF2 parameters, test key derivation correctness,
-or attack weak KDF configurations.
-
-**Design:**
+Also run the general-purpose timing tools:
 
 ```
-clearwing/agent/tools/crypto/kdf_tools.py
+timing_compare(
+    target="https://bugbounty-ctf.1password.com/api/v1/auth",
+    request_a={"method": "POST", "body": {"email": "valid@example.com"}},
+    request_b={"method": "POST", "body": {"email": "nonexistent@example.com"}},
+    samples=100
+)
 ```
 
-- **`analyze_kdf_parameters(target)`** — Extract KDF parameters from the
-  authentication flow (via SRP handshake or JS hooking): algorithm, iteration
-  count, salt length, output key length. Compare against current best
-  practices (OWASP minimums).
+**If timing leak found:** Quantify with Cohen's d. If d > 0.8 (large effect),
+this is exploitable. Use `timing_bitwise_probe` to attempt byte-at-a-time
+recovery of the SRP verifier or salt.
 
-- **`benchmark_kdf_cracking(algorithm, iterations, key_length)`** — Estimate
-  offline attack cost: compute hashes/second on CPU and GPU (via hashcat
-  benchmark mode), project time-to-crack for given password entropy.
-
-- **`test_2skd_implementation(target)`** — Verify the two-secret key derivation
-  (2SKD) implementation:
-  - Is the Secret Key XOR applied after PBKDF2?
-  - Is the derived key split correctly into AUK and SRP-x?
-  - Does changing the password produce a new AUK (and does it NOT produce a
-    new keyset, per the white paper)?
-
-- **`kdf_oracle_test(target, samples)`** — Test whether the server leaks
-  information about KDF correctness through response timing, error messages,
-  or behavioral differences.
-
-**Dependencies:** `hashlib` (stdlib), `cryptography` (for HKDF).
-
-### 4.4 MITM Proxy with TLS Interception
-
-**Gap:** The current proxy is a simple HTTP client with request logging. It
-cannot intercept live traffic, inspect encrypted payloads, or modify requests
-in flight. This is the single largest tooling gap vs. Burp Suite.
-
-**Design:**
+#### Step 3.3 — KDF Oracle Testing
 
 ```
-clearwing/agent/tools/recon/mitm_proxy.py
-clearwing/proxy/                      # Core proxy engine
-clearwing/proxy/ca.py                 # Certificate authority
-clearwing/proxy/interceptor.py        # Request/response hooks
+kdf_oracle_test(
+    target="https://bugbounty-ctf.1password.com/api/v1/auth",
+    username="ctf-account-email",
+    samples=50
+)
 ```
 
-Architecture:
+**Tests whether the server leaks whether the KDF output was "close" to correct.**
+A properly implemented server should be indistinguishable regardless of how wrong
+the derived key is.
 
-1. **CA module** (`ca.py`) — Generate a root CA certificate on first run, store
-   in `~/.clearwing/ca/`. Generate per-domain leaf certificates on the fly
-   for TLS interception. Export CA cert for browser trust store installation.
-
-2. **Proxy engine** (`interceptor.py`) — Async TCP proxy (built on `asyncio`
-   streams) that:
-   - Accepts client connections on a configurable local port
-   - Performs TLS termination with dynamic certificates
-   - Forwards requests to the upstream server over a fresh TLS connection
-   - Logs full plaintext request/response pairs to the proxy history
-   - Supports request/response modification via hooks
-
-3. **Agent tools** (`mitm_proxy.py`):
-   - **`mitm_start(listen_port, upstream_target)`** — Start the intercepting
-     proxy. Returns the CA certificate path for browser installation.
-   - **`mitm_set_intercept_rule(url_pattern, action, modification)`** — Define
-     rules: drop, delay, modify header/body, replace response.
-   - **`mitm_get_decrypted_traffic(filter)`** — Query decrypted traffic log
-     with filters on URL, method, content type, status code.
-   - **`mitm_inject_response(url_pattern, response_body)`** — Serve a
-     modified response for matching requests (e.g., substitute a tampered
-     JavaScript bundle or a fake public key).
-
-4. **Browser integration** — Configure the Playwright browser context to use
-   the local proxy and trust the generated CA certificate, enabling transparent
-   interception of all 1Password web client traffic.
-
-**Dependencies:** `cryptography` (CA cert generation), `asyncio` (proxy
-engine).
-
-### 4.5 Vault Encryption Analysis Tools
-
-**Gap:** No tools to analyze, parse, or attack 1Password's vault encryption
-format — AES-256-GCM with a key hierarchy rooted in the AUK.
-
-**Design:**
+#### Step 3.4 — 2SKD Implementation Verification
 
 ```
-clearwing/agent/tools/crypto/vault_tools.py
+test_2skd_implementation(
+    target="https://bugbounty-ctf.1password.com/api/v1/auth",
+    username="ctf-account-email",
+    password="test-password",
+    secret_key="A3-XXXXXX-..."
+)
 ```
 
-- **`parse_vault_blob(encrypted_data)`** — Parse the structure of an encrypted
-  vault item: extract IV/nonce, ciphertext, authentication tag, key ID,
-  algorithm identifier. Identify the encryption scheme without decryption.
+**Verifies:**
+- Secret Key XOR is applied after PBKDF2 (not before)
+- Derived key is split correctly into AUK (32 bytes) and SRP-x (32 bytes)
+- Changing password changes the output (not static)
+- Changing Secret Key changes the output (not ignored)
 
-- **`analyze_key_hierarchy(session_data)`** — Given captured session data
-  (from browser hooks or MITM), map the key hierarchy: AUK → personal
-  keyset → vault keys → item keys. Identify which keys are derived vs.
-  wrapped.
+**If 2SKD is misimplemented:** The theoretical 168-bit keyspace may be reduced.
+Document the specific flaw and assess exploitability.
 
-- **`test_aead_integrity(encrypted_data, modifications)`** — Attempt
-  ciphertext modifications (bit flips, truncation, tag substitution) and
-  observe server/client responses. Test for AEAD misuse (nonce reuse,
-  associated data omission, tag verification bypass).
+#### Step 3.5 — AEAD / Vault Encryption Probing
 
-- **`key_wrap_analysis(wrapped_keys)`** — Analyze key wrapping scheme: is
-  AES-KW used? RSA-OAEP? Are wrapped keys distinguishable? Is there a
-  padding oracle in the unwrap path?
-
-**Dependencies:** `cryptography` (AES-GCM, RSA-OAEP primitives for local
-testing).
-
-### 4.6 Timing Side-Channel Framework
-
-**Gap:** No systematic timing attack capability. Response time measurement
-exists nowhere in the tool chain.
-
-**Design:**
+Only reachable if you have a valid session (from zero-key attack or legitimate
+credentials for a test account).
 
 ```
-clearwing/agent/tools/crypto/timing_tools.py
+parse_vault_blob(encrypted_data="<captured_blob_hex>")
+analyze_key_hierarchy(session_data={"...": "..."})
+test_aead_integrity(encrypted_data="<blob_hex>",
+                    modifications=["bit_flip_byte_0", "truncate_tag", "zero_nonce"])
+key_wrap_analysis(wrapped_keys=["<key1_hex>", "<key2_hex>"])
 ```
 
-- **`timing_probe(target, request_generator, samples, warmup)`** — Send N
-  requests generated by a callback function, measure response time at
-  nanosecond precision (using `time.perf_counter_ns`). Return statistical
-  summary: mean, median, stddev, percentiles, distribution histogram.
+**Look for:**
+- Nonce reuse across items (catastrophic for AES-GCM)
+- Associated data omission (allows ciphertext substitution)
+- Padding oracle in key unwrapping path
+- Key ID enumeration (can you list all vault keys?)
 
-- **`timing_compare(target, request_a_gen, request_b_gen, samples)`** —
-  Compare timing distributions of two request types (e.g., valid vs. invalid
-  username). Apply Welch's t-test for statistical significance. Report
-  whether a timing difference exists and its magnitude.
+#### Step 3.6 — Server-Side Logic Bugs
 
-- **`timing_bitwise_probe(target, base_request, field, charset, position)`** —
-  Byte-at-a-time timing attack: for each candidate byte at a given position,
-  send N requests and measure response time. Identify the candidate that
-  produces the longest (or shortest) response, indicating a correct byte
-  match.
-
-**Statistical rigor:** All timing tools should account for network jitter by:
-- Running warmup requests to prime caches
-- Interleaving A/B samples to cancel drift
-- Reporting confidence intervals, not just point estimates
-- Supporting configurable outlier rejection (IQR or z-score)
-
-**Dependencies:** `numpy` (statistical analysis), `scipy.stats` (t-test).
-
-### 4.7 Cryptographic Protocol Skill Pack
-
-**Gap:** The skill system has vulnerability-specific playbooks for SQL
-injection, XSS, SSRF, etc. — but nothing for cryptographic protocol attacks.
-
-**Design:**
+Use the proxy tools to probe for authorization and logic flaws:
 
 ```
-clearwing/core/skills/crypto/
-├── srp_attacks.md          # SRP-6a attack methodology
-├── kdf_analysis.md         # KDF parameter assessment
-├── padding_oracle.md       # CBC padding oracle exploitation
-├── aead_misuse.md          # AES-GCM nonce reuse, tag forgery
-├── key_hierarchy.md        # Key wrapping and derivation attacks
-├── tls_assessment.md       # TLS configuration testing playbook
-└── timing_attacks.md       # Side-channel timing methodology
+proxy_request(url="https://bugbounty-ctf.1password.com/api/v1/vaults/<other_vault_id>/items",
+              method="GET", headers={"Authorization": "Bearer <session_token>"})
 ```
 
-Each skill provides the agent with:
-- Attack theory (what the vulnerability is and why it works)
-- Detection methodology (what to look for)
-- Exploitation steps (ordered tool invocations)
-- Validation criteria (how to confirm the attack succeeded)
-- Known mitigations (what a secure implementation looks like)
+**Test systematically:**
+- **IDOR**: Substitute vault IDs, item IDs, user IDs in API calls
+- **AuthZ bypass**: Access CTF vault items with a different account's session
+- **Race conditions**: Concurrent vault sharing / key distribution requests
+- **Parameter pollution**: Duplicate parameters, type confusion (string vs int
+  for IDs), negative indices
+- **API version drift**: Same request against `/api/v1/` vs `/api/v2/` — do
+  access controls differ?
 
-Example excerpt from `srp_attacks.md`:
-```
-## SRP Zero-Key Attack
-If the server does not validate that A % N != 0, the client can send A = 0
-(or any multiple of N), causing the shared secret S to equal zero regardless
-of the password. The session key K = H(S) becomes a known constant.
+#### Step 3.7 — Public Key Substitution
 
-### Detection
-1. srp_fuzz_parameters(target, username, [{A: "0"}])
-2. If server accepts and returns M2, the implementation is vulnerable.
-
-### Exploitation
-1. Compute K = H(0)
-2. Use K to decrypt vault key hierarchy
-3. Decrypt vault items with recovered keys
-```
-
-### 4.8 WebCrypto Instrumentation Module
-
-**Gap:** While `browser_execute_js` can run arbitrary JavaScript, there is no
-pre-built instrumentation for WebCrypto. The agent must write hooking code from
-scratch every time, which is error-prone and wastes tokens.
-
-**Design:**
+The white paper (Appendix A.3) acknowledges no user-to-user public key
+verification. Test whether the server can serve a substitute public key:
 
 ```
-clearwing/agent/tools/recon/webcrypto_hooks.py
-clearwing/static/webcrypto_instrument.js   # Injected JS payload
+mitm_set_intercept_rule(
+    url_pattern="*/api/*/keysets/*",
+    action="modify",
+    modification={"body": {"pubKey": "<attacker_public_key>"}}
+)
 ```
 
-Pre-built JavaScript instrumentation (`webcrypto_instrument.js`):
+If vault sharing is in play, this could allow the server (or a MITM) to
+substitute an attacker-controlled public key, causing the victim to encrypt
+vault keys to the attacker.
 
-```javascript
-// Wraps all SubtleCrypto methods with logging
-const original = crypto.subtle;
-const hooked = {};
-for (const method of ['encrypt','decrypt','sign','verify',
-    'digest','generateKey','deriveKey','deriveBits',
-    'importKey','exportKey','wrapKey','unwrapKey']) {
-  hooked[method] = async function(...args) {
-    const result = await original[method].apply(original, args);
-    window.__clearwing_crypto_log.push({
-      method, args: serializeArgs(args), timestamp: performance.now()
-    });
-    return result;
-  };
-}
-```
+#### Step 3.8 — Web Client Tampering
 
-Agent tools (`webcrypto_hooks.py`):
-
-- **`install_webcrypto_hooks(tab_name)`** — Inject the instrumentation script
-  into the page. Returns confirmation.
-
-- **`get_webcrypto_log(tab_name, filter)`** — Retrieve captured crypto
-  operations, optionally filtered by method name. Returns structured data
-  with arguments, timing, and (where safe) key material.
-
-- **`extract_srp_values(tab_name)`** — Parse the crypto log to extract SRP
-  handshake values: salt, iteration count, A, B, M1, M2, session key.
-
-- **`extract_key_hierarchy(tab_name)`** — Parse the crypto log to reconstruct
-  the key derivation chain: password → PBKDF2 → AUK → keyset decryption →
-  vault key unwrapping.
-
-### 4.9 Knowledge Graph Extensions for Crypto
-
-**Gap:** The knowledge graph has no entity types for cryptographic protocols,
-algorithms, or key material. It cannot model the relationships that matter for
-a crypto-focused engagement.
-
-**Design:**
-
-New entity types:
-- `protocol` — SRP, TLS, OAuth, HKDF, AES-KW
-- `algorithm` — AES-256-GCM, PBKDF2-HMAC-SHA256, RSA-OAEP, X25519
-- `key_material` — AUK, vault key, personal keyset, SRP verifier, Secret Key
-- `certificate` — TLS leaf cert, intermediate, root CA
-- `kdf_config` — algorithm + iteration count + salt length + output length
-
-New relationship types:
-- `USES_ALGORITHM` — protocol → algorithm
-- `DERIVES_KEY` — kdf_config → key_material
-- `WRAPS_KEY` — key_material → key_material
-- `DECRYPTS` — key_material → encrypted blob
-- `AUTHENTICATES_WITH` — protocol → key_material
-- `PRESENTS_CERT` — target → certificate
-- `VULNERABLE_TO` — algorithm/protocol → attack technique
-
-This allows queries like:
-- "What key material is derived from the account password?"
-- "What algorithms does the SRP handshake use?"
-- "Show the full key chain from password to vault decryption"
-
-### 4.10 Findings Schema Extensions
-
-**Gap:** The Finding dataclass has no fields for cryptographic weaknesses. A
-timing side channel and a SQL injection are represented identically.
-
-**Design:**
-
-Add optional fields to `clearwing/findings/types.py`:
-
-```python
-# Crypto-specific fields
-protocol: Optional[str]           # "SRP-6a", "TLS 1.3", "AES-KW"
-algorithm: Optional[str]          # "PBKDF2-HMAC-SHA256", "AES-256-GCM"
-crypto_attack_class: Optional[str] # "timing_side_channel", "parameter_validation",
-                                   # "nonce_reuse", "padding_oracle", "downgrade"
-key_material_exposed: Optional[str] # Description of what key material is at risk
-crypto_evidence: Optional[dict]    # Timing measurements, parameter dumps, etc.
-```
-
-Extend the evidence ladder with crypto-specific levels:
-
-```python
-evidence_level: Literal[
-    "suspicion",
-    "static_corroboration",
-    "parameter_anomaly",        # NEW: KDF iterations too low, weak group
-    "timing_confirmed",         # NEW: Statistically significant timing leak
-    "crash_reproduced",
-    "root_cause_explained",
-    "assumption_broken",        # NEW: Crypto assumption violated (e.g., S=0)
-    "exploit_demonstrated",
-    "key_material_recovered",   # NEW: Actual key material obtained
-    "patch_validated",
-]
-```
-
-### 4.11 Authentication Flow Recorder
-
-**Gap:** Analyzing a multi-step authentication protocol requires capturing the
-full sequence of requests, responses, and client-side computation. Currently
-each tool captures one piece — there is no unified view.
-
-**Design:**
+Analyze the JavaScript bundle for client-side vulnerabilities:
 
 ```
-clearwing/agent/tools/recon/auth_recorder.py
+browser_execute_js(code=`
+    // Check for DOM-based XSS sinks
+    const scripts = document.querySelectorAll('script');
+    const inlineScripts = Array.from(scripts).map(s => s.textContent.substring(0, 200));
+
+    // Check for postMessage handlers
+    const listeners = getEventListeners(window);
+
+    // Check service worker
+    const sw = await navigator.serviceWorker.getRegistration();
+
+    return { inlineScripts, listeners: Object.keys(listeners), serviceWorker: !!sw };
+`)
 ```
 
-- **`record_auth_flow(target, credentials, tab_name)`** — Orchestrate a full
-  authentication attempt while simultaneously:
-  1. Installing WebCrypto hooks in the browser
-  2. Routing browser traffic through the MITM proxy
-  3. Logging all API requests/responses with decrypted bodies
-  4. Capturing all client-side crypto operations with timing
+**Look for:**
+- `innerHTML` / `document.write` with user-controlled input (XSS)
+- `postMessage` handlers without origin validation
+- Service worker that could be poisoned
+- CSP bypasses (unsafe-inline, unsafe-eval, overly broad sources)
+- `eval()` or `Function()` with controllable arguments
 
-  Returns a unified `AuthFlowRecord`:
-  ```python
-  @dataclass
-  class AuthFlowRecord:
-      steps: list[AuthStep]       # Ordered request/response pairs
-      crypto_ops: list[CryptoOp]  # Client-side crypto with timing
-      srp_values: SRPValues       # Extracted SRP parameters
-      kdf_config: KDFConfig       # Extracted KDF parameters
-      session_tokens: dict        # Resulting session state
-      timing: dict                # Per-step latency measurements
-  ```
+**If XSS found:** The decrypted vault contents are in the DOM/JS memory. An XSS
+in the authenticated context can exfiltrate the plaintext flag directly.
 
-- **`diff_auth_flows(flow_a, flow_b)`** — Compare two recorded flows
-  (e.g., correct password vs. wrong password) and highlight differences in
-  server responses, timing, crypto operations, and error messages.
+#### Step 3.9 — Independent Factor Attack (Conditional)
 
-- **`replay_auth_flow(record, modifications)`** — Replay a recorded flow with
-  selective modifications to specific steps (e.g., change SRP parameter A in
-  step 3, observe what changes downstream).
+**Only if Step 2.4 found factor separation.**
 
-### 4.12 Password & Secret Key Attack Tools
+If the server distinguishes wrong-password from wrong-key, attack each factor
+independently:
 
-**Gap:** The existing `crack_password` tool is an online dictionary attack with
-20 default passwords. It is useless against a system protected by 2SKD where
-offline attacks require both the account password and the 128-bit Secret Key.
-
-**Design:**
-
+**Password attack (40-bit keyspace):**
 ```
-clearwing/agent/tools/crypto/credential_tools.py
+offline_crack_setup(
+    salt_hex="<captured_salt>",
+    iterations=<captured_iterations>,
+    algorithm="PBKDF2-HMAC-SHA256",
+    verifier_hex="<captured_verifier>",
+    wordlist="rockyou.txt"
+)
 ```
 
-- **`analyze_2skd_entropy()`** — Calculate the effective keyspace of the
-  combined (password × Secret Key) system. Report: password entropy estimate,
-  Secret Key entropy (128 bits), combined entropy, estimated cost to brute
-  force at various GPU price points.
+Use the generated hashcat command in Kali:
+```
+kali_execute(command="hashcat -m 10900 -a 0 hash.txt rockyou.txt")
+```
 
-- **`test_secret_key_validation(target, username, password, malformed_keys)`**
-  — Send authentication attempts with known-correct password but malformed
-  Secret Keys to test server-side validation: does the server distinguish
-  "wrong password" from "wrong Secret Key"? Information leakage here could
-  allow attacking each factor independently.
+**Secret Key attack (128-bit keyspace):**
+Infeasible by brute force. But if any predictable components were found in
+Step 2.3, the effective keyspace may be smaller.
 
-- **`enumerate_secret_key_format(target)`** — Probe the enrollment and
-  authentication endpoints to determine Secret Key format, length, character
-  set, and structure. Identify whether any portion is predictable (e.g.,
-  account UUID prefix).
-
-- **`offline_crack_setup(captured_data, wordlist, hashcat_mode)`** — Given
-  captured SRP verifier data or PBKDF2 parameters, generate a hashcat command
-  line (or wrapper script) for GPU-accelerated offline cracking. Estimate
-  time-to-crack based on `hashcat --benchmark` results.
+**Combined attack with factor separation:**
+If timing separation reveals which factor is wrong, an attacker can:
+1. Fix a random Secret Key, brute-force the password (~2^40 attempts)
+2. Fix the recovered password, brute-force the Secret Key (~2^128 attempts)
+3. Step 2 is still infeasible, but step 1 alone may yield the password, which
+   combined with other attacks (key hierarchy, server-side) may be sufficient
 
 
-## 5. Implementation Priority
+### Phase 4: Exploit Development & Reporting
 
-Ranked by expected impact on the 1Password CTF specifically:
+#### Step 4.1 — Chain Findings
 
-| Priority | Feature | Rationale |
-|----------|---------|-----------|
-| **P0** | WebCrypto Instrumentation (4.8) | Fastest path to understanding the client-side crypto — captures every key derivation, encryption, and SRP operation without reverse-engineering the JS bundle |
-| **P0** | SRP Protocol Testing (4.2) | The authentication protocol is the front door; parameter validation bugs (zero-key) are the most likely class of exploitable weakness |
-| **P0** | Auth Flow Recorder (4.11) | Unifies browser hooks + proxy + timing into a single observable flow — eliminates manual correlation |
-| **P1** | MITM Proxy (4.4) | Enables full visibility into encrypted API traffic; required for many downstream attack tools |
-| **P1** | Timing Side-Channel Framework (4.6) | The white paper acknowledges WebCrypto forces PBKDF2 (not Argon2) — timing attacks on the KDF or SRP are plausible |
-| **P1** | TLS Inspection (4.1) | Validates transport security claims; identifies downgrade paths |
-| **P1** | Crypto Skill Pack (4.7) | Gives the agent structured attack methodology for crypto protocols — prevents flailing |
-| **P2** | KDF Analysis Tools (4.3) | Important but secondary — the KDF is likely correctly parameterized |
-| **P2** | Vault Encryption Analysis (4.5) | Only reachable after breaking authentication or key derivation |
-| **P2** | Knowledge Graph Extensions (4.9) | Organizational — valuable for long engagements but not blocking |
-| **P2** | Findings Schema Extensions (4.10) | Reporting quality — not blocking for the CTF itself |
-| **P3** | Credential Attack Tools (4.12) | 2SKD makes brute force infeasible by design; these tools validate that assumption rather than break it |
+No single finding may be sufficient. Map the attack chain:
+
+```
+query_knowledge_graph(query="MATCH (t:target)-[:VULNERABLE_TO]->(v) RETURN t, v")
+```
+
+**Common chains that reach the flag:**
+1. SRP zero-key -> valid session -> vault key via key hierarchy -> decrypt item
+2. Factor separation -> password crack -> AUK recovery -> vault decrypt
+3. XSS in authenticated context -> DOM exfiltration of decrypted note
+4. IDOR on item endpoint -> encrypted blob -> key hierarchy attack -> decrypt
+5. Public key substitution -> vault sharing -> attacker-encrypted keys -> decrypt
+
+#### Step 4.2 — PoC Development
+
+For any viable attack chain, build a complete PoC:
+
+```
+create_custom_tool(
+    name="ctf_exploit",
+    description="End-to-end exploit for 1Password CTF",
+    code="async def ctf_exploit(target: str) -> dict: ..."
+)
+```
+
+Or use the Kali container for compiled exploits:
+```
+kali_setup()
+kali_execute(command="python3 /tmp/exploit.py --target bugbounty-ctf.1password.com")
+```
+
+The PoC must demonstrate: starting from zero, recover the plaintext "bad poetry"
+secure note.
+
+#### Step 4.3 — Report Generation
+
+```
+generate_report(
+    title="1Password CTF — [Attack Class] Leading to Vault Content Recovery",
+    findings=[...],
+    evidence=[...],
+    severity="critical"
+)
+save_report(format="markdown", path="1password_ctf_report.md")
+```
+
+**Report structure for HackerOne:**
+1. Summary — one paragraph describing the vulnerability and impact
+2. Attack chain — numbered steps from initial access to flag recovery
+3. Evidence — screenshots, captured values, timing data, PoC output
+4. Affected components — which layer(s) of the security model failed
+5. Remediation — specific fix recommendations
+6. Reproduction steps — exact commands and inputs to reproduce
+
+
+## 4. Decision Tree
+
+Quick reference for routing based on findings at each phase.
+
+```
+START
+  |
+  v
+[1.2] TLS downgrade possible? --YES--> File finding, test POODLE/BEAST
+  |NO                                    but unlikely to reach vault data alone
+  v
+[2.4] Factor separation? --YES--> [3.9] Independent factor attack
+  |NO                              |
+  v                                v
+[3.1] SRP zero-key accepted? --YES--> Session key known, access vault API
+  |NO                                  |
+  v                                    v
+[3.2] Timing leak? --YES--> Quantify, attempt byte-at-a-time recovery
+  |NO                        |
+  v                          v
+[3.5] AEAD misuse? --YES--> Nonce reuse = key recovery; padding oracle = decrypt
+  |NO                        |
+  v                          v
+[3.6] IDOR/AuthZ bypass? --YES--> Access encrypted blobs, chain with crypto attacks
+  |NO                              |
+  v                                v
+[3.7] PubKey substitution? --YES--> Vault sharing attack
+  |NO                                |
+  v                                  v
+[3.8] XSS in web client? --YES--> Direct DOM exfiltration of decrypted note
+  |NO
+  v
+Re-evaluate. Check for:
+  - API version differences
+  - Race conditions
+  - Recovery group flows
+  - Cache/CDN poisoning of JS bundle
+  - New CVEs in dependencies
+```
+
+
+## 5. Hardest Parts (White Paper Appendix A Acknowledgments)
+
+The 1Password security white paper explicitly flags these as the weakest points.
+They should receive the most attention:
+
+| Appendix | Acknowledged Weakness | Our Tool Coverage |
+|----------|----------------------|-------------------|
+| A.1 | WebCrypto forces PBKDF2, cannot use Argon2 — weaker against GPU attacks | `benchmark_kdf_cracking`, `analyze_2skd_entropy`, `offline_crack_setup` |
+| A.2 | JavaScript delivery is trusted — no code signing, TOFU model | `mitm_inject_response`, `browser_execute_js`, JS bundle analysis |
+| A.3 | No user-to-user public key verification — server can substitute keys | `mitm_set_intercept_rule`, `key_wrap_analysis` |
+| A.4 | Recovery groups expand the attack surface | `proxy_request` against recovery endpoints |
+| A.5 | Server could withhold security updates or serve old client code | `mitm_inject_response` with older JS bundle |
+
+The white paper's security model assumes a *non-malicious server*. Several
+attacks (A.2, A.3, A.5) become viable if the server is compromised or if a
+MITM is established. The CTF may intentionally weaken one of these assumptions.
