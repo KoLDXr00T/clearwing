@@ -1237,3 +1237,83 @@ The crypto architecture has no theoretical weaknesses exploitable without:
 
 All four of these are either out of scope, mitigated by the client-side
 protections documented in Step 3.9, or require access we don't have.
+
+
+### Step 3.12 — Subdomain Enumeration
+
+**Date:** 2026-04-23
+
+Enumerated 35 subdomains of `1password.com`:
+
+| Subdomain | DNS | Notes |
+|-----------|-----|-------|
+| `status.1password.com` | CNAME → `stspg-customer.com` | StatusPage — **claimed and operational** |
+| `b5n.1password.com` | CNAME → `b5n.edge.1password.com` | WebSocket notifier |
+| `blog.1password.com` | CloudFront (18.67.65.23) | Blog/content |
+| `billing.1password.com` | AWS EU (52.59.156.157) | Billing service |
+| `support.1password.com` | 3.162.125.33 | Support site |
+| All other subdomains | AWS US A records | Same load balancer cluster |
+
+**All tested subdomains serve the same 1Password web app** (version 2248).
+This is a wildcard DNS configuration — `*.1password.com` resolves to the
+same ELB cluster and serves the same SPA. There are no dangling CNAMEs
+or unclaimed cloud resources.
+
+**Impact on postMessage attack:** The `D()` origin validation weakness
+(accepts any `*.1password.com` subdomain) is **NOT exploitable** because
+all subdomains serve the identical legitimate app. There is no controlled
+subdomain to send malicious postMessage from.
+
+
+## Engagement Status: Pre-Auth Phase Complete
+
+**Date:** 2026-04-24
+
+### Summary of Findings
+
+**25+ tests conducted across 5 attack domains. No exploitable
+vulnerability found without valid account credentials.**
+
+| Phase | Steps | Key Finding |
+|-------|-------|-------------|
+| 1. Recon | 1.1–1.6 | Minimal surface (80/443 only), strict TLS, SRI on all scripts, WASM hash whitelist, 346K CVEs searched |
+| 2. Protocol | 2.1–2.2 | v3 auth discovered, X-AgileBits-Client header required, SRP params need valid (email, skid, userUuid) |
+| 3. Client-side | 3.9–3.12 | Native WebCrypto (no polyfill), no exploitable lodash CVE, Worker WASM bypass theoretical only, no subdomain takeover |
+| 3. Crypto | 3.11 | 650K PBKDF2 iterations, HKDF-based 2SKD (not raw XOR), 96-bit random GCM nonces, SHA-1 SRP-x per RFC 5054 |
+| 3. Pre-auth | 3.10 | Recovery needs valid UUID, signup disabled, preauth-perftrace is write-only, uniform 400/401 errors |
+
+### Blockers
+
+1. **SRP parameters are gatekept** — `/api/v3/auth/start` requires valid
+   `(email, skFormat, skid, deviceUuid, userUuid)`. Without these, we
+   cannot obtain salt, iterations, or server ephemeral B.
+
+2. **No signup** — the CTF instance has signup disabled. Cannot create
+   a test account.
+
+3. **Uniform error responses** — all auth endpoints return identical
+   `400 {}` or `401 {}` regardless of input. No information leakage.
+
+4. **Wildcard DNS** — all `*.1password.com` subdomains serve the same
+   app. No subdomain takeover possible.
+
+### Recommended Next Steps
+
+1. **Obtain test account credentials** — check if the CTF provides
+   credentials via the HackerOne challenge description, registration
+   email, or a hidden endpoint. Without credentials, the engagement
+   cannot progress to protocol-level testing.
+
+2. **If credentials are obtained:**
+   - Run `test_secret_key_validation` for factor separation testing
+   - Run `srp_timing_attack` for PARASITE-class timing analysis
+   - Run `kdf_oracle_test` for KDF correctness oracle detection
+   - Analyze vault encryption key hierarchy with authenticated session
+   - Test recovery flow with valid recovery key UUID
+
+3. **Alternative approaches without credentials:**
+   - Deeper reverse engineering of the WASM crypto modules
+   - Fuzzing the confidential computing endpoint (Rust serde errors
+     suggest structured input parsing)
+   - Monitoring the v3 auth flow for protocol-level state confusion
+     across sessions (session fixation, race conditions)
