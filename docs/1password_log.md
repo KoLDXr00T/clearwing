@@ -396,3 +396,120 @@ authentication. Key observations:
    session/token brute force could be viable).
 6. **v2 auth flow** — the client uses v2 (`/api/v2/auth` -> `/api/v2/auth/complete`)
    rather than v1. Both respond similarly.
+
+
+## Step 1.5 — Public Source Analysis
+
+**Date:** 2026-04-23
+
+### 1Password Public Repositories
+
+93 public repos on GitHub under `github.com/1Password`. Relevant repos:
+
+**Highest value:**
+
+| Repo | Language | Description |
+|------|----------|-------------|
+| `1Password/srp` | Go | **SRP-6a implementation used by 1Password Teams** (389 stars) |
+| `burp-1password-session-analyzer` | Java | **Burp plugin for analyzing encrypted 1Password sessions** (79 stars) |
+| `passkey-rs` | Rust | WebAuthn authenticator framework |
+| `curve25519-dalek` | Rust | Fork with specific bug fix |
+
+### SRP Library Analysis (`1Password/srp`)
+
+**Files:** 13 Go source files, ~70KB total. Full SRP-6a implementation with both
+standard (RFC 5054) and non-standard (1Password legacy) modes.
+
+**Key classes:**
+- `SRP` struct — main client/server object
+- `Group` — Diffie-Hellman group parameters
+- `Hash` — configurable hash (SHA-256 default)
+
+#### Critical Validation: `IsPublicValid()` (srp.go:208)
+
+```go
+func (s *SRP) IsPublicValid(AorB *big.Int) bool {
+    if s.group.Reduce(AorB).Cmp(bigOne) == 0 {
+        return false  // Rejects A % N == 1
+    }
+    if s.group.IsZero(AorB) {
+        return false  // Rejects A == 0
+    }
+    return true
+}
+```
+
+**Assessment:** This validates A != 0 and A % N != 1, but **does NOT check
+A % N != 0** directly. The `Reduce` call computes `A mod N`. If `A = N`, then
+`Reduce(A) = 0`, which is caught by `IsZero`. If `A = 2N`, then `Reduce(A) = 0`,
+also caught. But the check for `Cmp(bigOne)` only catches `A % N == 1`, not
+`A % N == 0` when A > 0.
+
+Wait — re-reading: `IsZero` checks if the value is zero. `Reduce(A)` gives
+`A mod N`. So:
+- A=0: `IsZero(0)` = true -> rejected
+- A=N: `Reduce(N) = 0`, `IsZero(0)` = true -> rejected
+- A=2N: `Reduce(2N) = 0`, `IsZero(0)` = true -> rejected
+- A=kN: same, all rejected
+
+**The zero-key attack is properly mitigated in this library.** The library also
+rejects A=1 (which would make the session key deterministic but not trivially
+zero). Additional safety: `SetOthersPublic()` calls `IsPublicValid()` and sets
+`badState=true` on failure, preventing any further key computation.
+
+#### Non-Standard u Calculation
+
+The library has a documented bug:
+```go
+// BUG(jpg): Calculation of u does not use RFC 5054 compatible padding/hashing
+```
+
+The non-standard mode (`calculateUNonStd`) concatenates hex strings of A and B
+with leading zeros stripped, then hashes. This differs from RFC 5054 which
+requires fixed-width padding. The standard mode (`calculateUStd`) uses proper
+padding. **The web client likely uses the standard mode** (`NewClientStd`), but
+this should be verified.
+
+#### Other Observations
+
+- SHA-256 is hardcoded as the default hash
+- Ephemeral secret minimum size: 32 bytes (per RFC 5054)
+- `u == 0` is explicitly rejected (would make session key independent of password)
+- Server-side key computation: `S = (A * v^u) ^ b mod N`
+- Client-side key computation: `S = (B - k*g^x) ^ (a + u*x) mod N`
+
+### Burp Plugin Insight
+
+The `burp-1password-session-analyzer` README reveals critical architecture:
+
+> "We require every request and response that are specific to a 1Password account
+> to be protected by the account's master password and secret key, which means
+> every bit of data that gets sent is encrypted, and every request is authenticated."
+
+This confirms:
+1. **All API payloads are encrypted** — not just auth, ALL requests/responses
+2. **Every request is MAC'd** — explains the `X-AgileBits-MAC` header from Step 1.4
+3. **Standard web fuzzing tools don't work** — you can't tamper with requests
+   without the session key
+4. The Burp plugin requires a valid session key to decrypt/re-encrypt payloads
+
+This means:
+- IDOR/parameter tampering is not possible without first obtaining a valid session
+- API fuzzing requires understanding the encryption layer
+- The `X-AgileBits-Session-ID` + `X-AgileBits-MAC` headers are integral to the
+  protocol, not optional
+
+### Assessment
+
+The SRP library is well-implemented:
+- Zero-key attacks (A=0, A=N, A=kN) are properly rejected
+- The library is well-tested (20KB of tests)
+- SHA-256 is used throughout
+- Session key derivation follows standard SRP-6a
+
+The main attack surface from source analysis:
+1. **Non-standard u calculation** — if the server uses the legacy mode, the
+   different padding could theoretically be exploitable, though this is unlikely
+2. **All-encrypted API protocol** — makes server-side testing much harder than
+   anticipated. We need the session key to even send valid requests
+3. **Burp plugin exists** — we should use this for any authenticated testing

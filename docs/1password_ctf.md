@@ -443,8 +443,23 @@ extract_key_hierarchy(tab_name="1password-ctf")
 
 ### Phase 3: Attack Execution
 
-Goal: systematically test each attack class. Start with highest-probability
-paths.
+Goal: systematically test each attack class.
+
+**Critical constraint discovered in Phase 1:** All API traffic beyond the SRP
+handshake is encrypted with the session key and authenticated via
+`X-AgileBits-MAC`. Standard HTTP fuzzing tools cannot send valid requests.
+This divides attacks into two tiers:
+
+- **Pre-auth attacks** (Steps 3.1–3.5): Can be executed without credentials.
+  Target the SRP handshake, timing side channels, and the recovery flow.
+- **Authenticated attacks** (Steps 3.6–3.9): Require either a valid session
+  (from a test account or a successful pre-auth exploit) or use the
+  1Password Burp plugin to encrypt/decrypt session traffic. These attack the
+  vault encryption, key hierarchy, and server-side authorization.
+
+---
+
+#### Pre-Auth Attacks
 
 #### Step 3.1 — SRP Zero-Key Attack
 
@@ -456,23 +471,23 @@ load_skills(skill_name="srp_attacks")
 srp_fuzz_parameters(
     target="https://bugbounty-ctf.1password.com/api/v1/auth",
     username="ctf-account-email",
-    test_vectors=[
-        {"A": "0"},
-        {"A": "<N_hex>"},
-        {"A": "<2N_hex>"},
-        {"A": "<kN_hex>"}
-    ]
+    test_vectors="all"
 )
 ```
 
+**Vectors tested:** A=0, A=N, A=2N, A=kN, truncated proofs, malformed values.
+
 **If the server accepts A=0 and returns M2:**
 1. Compute `K = H(0)` — the session key is now known
-2. Use K to authenticate and retrieve encrypted vault data
-3. The vault is still encrypted, but you have a valid session
-4. Proceed to vault key recovery via the key hierarchy
+2. Use K to encrypt/MAC requests and access the authenticated API
+3. Retrieve encrypted vault data via the session
+4. Vault data is still encrypted by AUK, but we have a valid session —
+   proceed to key hierarchy analysis (Step 3.7)
 
-**Expected result:** Server rejects. 1Password almost certainly validates A.
-But this test takes seconds and the payoff is total compromise, so always run it.
+**Expected result:** Server rejects. The public SRP library (`1Password/srp`)
+correctly validates A in `IsPublicValid()`: rejects A=0 via `IsZero()` and
+A=kN via `Reduce(A).IsZero()`. But the production server may use a different
+implementation, so always test.
 
 #### Step 3.2 — SRP Timing Analysis
 
@@ -487,23 +502,31 @@ srp_timing_attack(
 
 **Look for timing differences in:**
 - Username lookup (valid vs. invalid email) — user enumeration
-- Password verification stage (partially correct vs. fully wrong)
-- M1 proof validation (correct prefix bytes vs. random)
+- M1 proof validation (random M1 vs. zero M1)
 
-Also run the general-purpose timing tools:
+Also run the general-purpose timing tools against the unauthenticated
+`/api/v2/auth` endpoint:
 
 ```
 timing_compare(
-    target="https://bugbounty-ctf.1password.com/api/v1/auth",
-    request_a={"method": "POST", "body": {"email": "valid@example.com"}},
-    request_b={"method": "POST", "body": {"email": "nonexistent@example.com"}},
+    target="https://bugbounty-ctf.1password.com",
+    method_a="POST", path_a="/api/v2/auth",
+    body_a='{"email":"valid@example.com"}',
+    label_a="valid_email",
+    method_b="POST", path_b="/api/v2/auth",
+    body_b='{"email":"nonexistent-user-12345@example.com"}',
+    label_b="invalid_email",
     samples=100
 )
 ```
 
+**Note:** Step 1.4 already showed that auth endpoints return identical `401 {}`
+for all emails, which is a good sign. But timing differences can exist even
+when response bodies are identical.
+
 **If timing leak found:** Quantify with Cohen's d. If d > 0.8 (large effect),
-this is exploitable. Use `timing_bitwise_probe` to attempt byte-at-a-time
-recovery of the SRP verifier or salt.
+this enables user enumeration. Use `timing_bitwise_probe` to attempt
+byte-at-a-time recovery if the leak correlates with specific input bytes.
 
 #### Step 3.3 — KDF Oracle Testing
 
@@ -519,116 +542,224 @@ kdf_oracle_test(
 A properly implemented server should be indistinguishable regardless of how wrong
 the derived key is.
 
-#### Step 3.4 — 2SKD Implementation Verification
+#### Step 3.4 — Factor Separation (Pre-Auth via SRP)
 
 ```
-test_2skd_implementation(
+test_secret_key_validation(
     target="https://bugbounty-ctf.1password.com/api/v1/auth",
     username="ctf-account-email",
-    password="test-password",
-    secret_key="A3-XXXXXX-..."
+    password="known-password",
+    secret_key="A3-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX",
+    samples=50,
+    warmup=10,
+    outlier_method="iqr"
 )
 ```
 
-**Verifies:**
-- Secret Key XOR is applied after PBKDF2 (not before)
-- Derived key is split correctly into AUK (32 bytes) and SRP-x (32 bytes)
-- Changing password changes the output (not static)
-- Changing Secret Key changes the output (not ignored)
+This sends SRP verify requests with wrong-password vs. wrong-key derived
+values. **Does not require a valid session** — it operates at the SRP
+handshake level, which is pre-auth.
 
-**If 2SKD is misimplemented:** The theoretical 168-bit keyspace may be reduced.
-Document the specific flaw and assess exploitability.
+**If factor separation detected:** Critical finding. See Step 3.9.
 
-#### Step 3.5 — AEAD / Vault Encryption Probing
+#### Step 3.5 — Recovery Key Flow Exploitation
 
-Only reachable if you have a valid session (from zero-key attack or legitimate
-credentials for a test account).
+**This is the highest-value pre-auth attack surface identified in Phase 1.**
+The white paper (Appendix A.4) acknowledges recovery groups as an expanded
+attack surface. We found 10+ recovery endpoints in Step 1.4.
 
 ```
-parse_vault_blob(encrypted_data="<captured_blob_hex>")
-analyze_key_hierarchy(session_data={"...": "..."})
-test_aead_integrity(encrypted_data="<blob_hex>",
-                    modifications=["bit_flip_byte_0", "truncate_tag", "zero_nonce"])
-key_wrap_analysis(wrapped_keys=["<key1_hex>", "<key2_hex>"])
+proxy_request(url="https://bugbounty-ctf.1password.com/api/v2/recovery-keys/session/new",
+              method="POST", body={"email": "ctf-account@example.com"})
 ```
 
-**Look for:**
-- Nonce reuse across items (catastrophic for AES-GCM)
-- Associated data omission (allows ciphertext substitution)
-- Padding oracle in key unwrapping path
-- Key ID enumeration (can you list all vault keys?)
+**Probe the full recovery flow:**
 
-#### Step 3.6 — Server-Side Logic Bugs
+1. `/api/v2/recovery-keys/session/new` — can we start a recovery session
+   without proper authorization? What parameters does it accept?
+2. `/api/v2/recovery-keys/session/identity-verification/email/start` — does
+   this trigger an email? Can we intercept or predict the verification code?
+3. `/api/v2/recovery-keys/session/identity-verification/email/submit` — is
+   the verification code brute-forceable? (No rate limiting was observed in
+   Step 1.4)
+4. `/api/v2/recovery-keys/session/material` — if we can reach this endpoint,
+   does it return key material that could recover the account?
+5. `/api/v2/recovery-keys/session/complete` — can we complete recovery and
+   replace the account's keyset?
 
-Use the proxy tools to probe for authorization and logic flaws:
+**Also probe:**
+- `/api/v2/recovery-keys/policies` — what recovery policies are configured?
+- `/api/v2/recover/continue` — alternate recovery path?
+- `/api/v2/session-restore/restore-key` — can a saved session be restored
+  without the original credentials?
+
+**What we're looking for:** Any path that allows account recovery without
+both the password and Secret Key. If the recovery flow can bypass 2SKD — even
+partially — that breaks the security model.
+
+---
+
+#### Authenticated Attacks
+
+**Prerequisite:** These steps require either:
+- A valid test account on `bugbounty-ctf.1password.com` (if allowed by CTF rules)
+- A session obtained via a pre-auth exploit (Steps 3.1–3.5)
+- The 1Password Burp plugin (`burp-1password-session-analyzer`) configured with
+  a known session key to encrypt/decrypt API traffic
+
+**Setup for authenticated testing:**
+
+The `X-AgileBits-MAC` header is an HMAC over the request, and
+`X-AgileBits-Session-ID` identifies the session. All request/response bodies
+are encrypted with the session key derived from the SRP handshake. To send
+valid authenticated requests, we need to:
+
+1. Complete an SRP handshake to obtain the session key
+2. Use the session key to encrypt request bodies and compute MACs
+3. Decrypt response bodies with the same key
+
+This can be done via `srp_handshake` (if we have valid credentials) or by
+building a custom tool that implements the session encryption layer:
 
 ```
-proxy_request(url="https://bugbounty-ctf.1password.com/api/v1/vaults/<other_vault_id>/items",
-              method="GET", headers={"Authorization": "Bearer <session_token>"})
-```
-
-**Test systematically:**
-- **IDOR**: Substitute vault IDs, item IDs, user IDs in API calls
-- **AuthZ bypass**: Access CTF vault items with a different account's session
-- **Race conditions**: Concurrent vault sharing / key distribution requests
-- **Parameter pollution**: Duplicate parameters, type confusion (string vs int
-  for IDs), negative indices
-- **API version drift**: Same request against `/api/v1/` vs `/api/v2/` — do
-  access controls differ?
-
-#### Step 3.7 — Public Key Substitution
-
-The white paper (Appendix A.3) acknowledges no user-to-user public key
-verification. Test whether the server can serve a substitute public key:
-
-```
-mitm_set_intercept_rule(
-    url_pattern="*/api/*/keysets/*",
-    action="modify",
-    modification={"body": {"pubKey": "<attacker_public_key>"}}
+create_custom_tool(
+    name="1p_session_client",
+    description="1Password authenticated API client with session encryption",
+    code="..."
 )
 ```
 
-If vault sharing is in play, this could allow the server (or a MITM) to
-substitute an attacker-controlled public key, causing the victim to encrypt
-vault keys to the attacker.
+Alternatively, use the MITM proxy + WebCrypto hooks to capture a live session
+and replay/modify requests through the Burp plugin.
 
-#### Step 3.8 — Web Client Tampering
+#### Step 3.6 — Request Signing Analysis
 
-Analyze the JavaScript bundle for client-side vulnerabilities:
+Before attempting authenticated attacks, understand the MAC scheme:
 
 ```
 browser_execute_js(code=`
-    // Check for DOM-based XSS sinks
-    const scripts = document.querySelectorAll('script');
-    const inlineScripts = Array.from(scripts).map(s => s.textContent.substring(0, 200));
-
-    // Check for postMessage handlers
-    const listeners = getEventListeners(window);
-
-    // Check service worker
-    const sw = await navigator.serviceWorker.getRegistration();
-
-    return { inlineScripts, listeners: Object.keys(listeners), serviceWorker: !!sw };
+    // Hook XMLHttpRequest/fetch to capture the MAC computation
+    const origFetch = window.fetch;
+    window.fetch = async function(...args) {
+        const req = args[0] instanceof Request ? args[0] : new Request(...args);
+        const headers = {};
+        req.headers.forEach((v, k) => headers[k] = v);
+        console.log('REQUEST:', req.url, headers);
+        return origFetch.apply(this, args);
+    };
 `)
 ```
 
+**Determine:**
+- What is MAC'd? (URL, body, headers, timestamp?)
+- What key is the MAC derived from? (Session key? A sub-key?)
+- Is there a nonce/counter to prevent replay?
+- Can requests be replayed if the MAC is valid?
+
+If the MAC doesn't include a timestamp or counter, **replay attacks** may be
+possible — capture a valid request and resend it with a different session.
+
+#### Step 3.7 — Vault Encryption & Key Hierarchy
+
+With a valid session, capture encrypted vault data and key material:
+
+```
+install_webcrypto_hooks(tab_name="1password-ctf")
+# Navigate to vault, trigger item decryption
+extract_key_hierarchy(tab_name="1password-ctf")
+```
+
+Then analyze:
+
+```
+analyze_key_hierarchy(session_data=<extracted_hierarchy>)
+parse_vault_blob(encrypted_data="<captured_blob_hex>")
+key_wrap_analysis(wrapped_keys=[...])
+```
+
 **Look for:**
-- `innerHTML` / `document.write` with user-controlled input (XSS)
-- `postMessage` handlers without origin validation
-- Service worker that could be poisoned
-- CSP bypasses (unsafe-inline, unsafe-eval, overly broad sources)
-- `eval()` or `Function()` with controllable arguments
+- Nonce reuse across items (catastrophic for AES-GCM — enables key recovery)
+- Key IDs that are sequential or predictable
+- `exportKey` calls that expose raw AES keys (check `extractable` flag)
+- Shared vault keys that multiple accounts can access
+- Whether the AUK is used directly or a sub-key is derived
 
-**If XSS found:** The decrypted vault contents are in the DOM/JS memory. An XSS
-in the authenticated context can exfiltrate the plaintext flag directly.
+```
+test_aead_integrity(encrypted_data="<blob_hex>",
+                    target="https://bugbounty-ctf.1password.com",
+                    endpoint_path="/api/v1/vault/items",
+                    modifications="all", samples=3)
+```
 
-#### Step 3.9 — Independent Factor Attack (Conditional)
+**Note:** AEAD modification requests must go through the session encryption
+layer. Use the MITM proxy with WebCrypto hooks to intercept *after* the client
+decrypts but *before* it processes, or modify the encrypted blobs at the
+application layer.
 
-**Only if Step 2.4 found factor separation.**
+#### Step 3.8 — Server-Side Logic Bugs (Authenticated)
 
-If the server distinguishes wrong-password from wrong-key, attack each factor
-independently:
+With a valid encrypted session, test authorization boundaries. Every request
+must be encrypted and MAC'd — use the session client tool from Step 3.6.
+
+**Test systematically:**
+- **IDOR**: Substitute vault UUIDs, item UUIDs, user UUIDs in encrypted
+  request payloads. Can account A's session access account B's vaults?
+- **Vault access boundaries**: `/api/v2/mycelium/v` — what is this endpoint?
+  The name suggests a distributed/mesh data structure. Probe for cross-account
+  data leakage.
+- **Key rotation gaps**: After a password change, are old session keys
+  invalidated? Can an old session key decrypt new vault data?
+- **API version drift**: `/api/v1/vault/*` vs `/api/v2/vault` — do v1
+  endpoints have weaker access controls?
+- **Race conditions**: Concurrent requests to vault sharing endpoints —
+  can a TOCTOU bug grant access to a vault during the sharing window?
+
+#### Step 3.9 — Client-Side Attacks
+
+The CSP is strict (`default-src 'none'`, no `unsafe-inline`/`unsafe-eval`,
+SRI on all scripts, WASM hash whitelist). Traditional XSS is very difficult.
+Focus on:
+
+**JS bundle reverse engineering:**
+```
+# Download and analyze the main application bundle
+browser_execute_js(code=`
+    // Look for postMessage handlers — CSP doesn't restrict these
+    const origAddEventListener = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function(type, listener, opts) {
+        if (type === 'message') console.log('postMessage handler registered:', listener.toString().substring(0, 200));
+        return origAddEventListener.call(this, type, listener, opts);
+    };
+`)
+```
+
+**Attack vectors within CSP constraints:**
+- `postMessage` handlers without origin validation — if the SPA accepts
+  messages from `*.1password.com` frames, a compromised subdomain could inject
+- `wasm-unsafe-eval` — the WASM hash whitelist mitigates this, but verify the
+  hash check runs *before* WASM execution, not after
+- Prototype pollution via `vendor-lodash` — lodash has had prototype pollution
+  CVEs; check the version and whether `_.merge`/`_.set` are used with
+  attacker-controlled input
+- Service worker scope — if a service worker is registered, can its fetch
+  handler be poisoned to intercept decrypted vault data?
+
+**WASM hash whitelist bypass:**
+The inline script patches `WebAssembly.compile/instantiate/validate` to verify
+hashes. But:
+- Does it patch `WebAssembly.compileStreaming` correctly? (Check: it converts
+  to `ArrayBuffer` first, which is correct)
+- Can the hash check be bypassed by loading WASM via a `Worker`? The CSP
+  allows `worker-src 'self'` — a worker has its own scope and may not inherit
+  the monkey-patched `WebAssembly` object
+- Can the trusted hash list be modified before WASM loading? (Unlikely — the
+  script runs inline before any external scripts load)
+
+#### Step 3.10 — Independent Factor Attack (Conditional)
+
+**Only if Step 3.4 found factor separation.**
+
+If the server distinguishes wrong-password from wrong-key:
 
 **Password attack (40-bit keyspace):**
 ```
@@ -647,7 +778,7 @@ kali_execute(command="hashcat -m 10900 -a 0 hash.txt rockyou.txt")
 ```
 
 **Secret Key attack (128-bit keyspace):**
-Infeasible by brute force. But if any predictable components were found in
+Infeasible by brute force. But if predictable components were found in
 Step 2.3, the effective keyspace may be smaller.
 
 **Combined attack with factor separation:**
@@ -655,7 +786,7 @@ If timing separation reveals which factor is wrong, an attacker can:
 1. Fix a random Secret Key, brute-force the password (~2^40 attempts)
 2. Fix the recovered password, brute-force the Secret Key (~2^128 attempts)
 3. Step 2 is still infeasible, but step 1 alone may yield the password, which
-   combined with other attacks (key hierarchy, server-side) may be sufficient
+   combined with other attacks (recovery flow, key hierarchy) may be sufficient
 
 
 ### Phase 4: Exploit Development & Reporting
@@ -719,42 +850,55 @@ save_report(format="markdown", path="1password_ctf_report.md")
 
 ## 4. Decision Tree
 
-Quick reference for routing based on findings at each phase.
+Quick reference for routing based on findings at each phase. Pre-auth attacks
+run first because every authenticated attack requires a session.
 
 ```
 START
   |
   v
 [1.2] TLS downgrade possible? --YES--> File finding, test POODLE/BEAST
-  |NO                                    but unlikely to reach vault data alone
+  |NO                                    (unlikely to reach vault data alone)
   v
-[2.4] Factor separation? --YES--> [3.9] Independent factor attack
-  |NO                              |
-  v                                v
-[3.1] SRP zero-key accepted? --YES--> Session key known, access vault API
-  |NO                                  |
-  v                                    v
-[3.2] Timing leak? --YES--> Quantify, attempt byte-at-a-time recovery
-  |NO                        |
-  v                          v
-[3.5] AEAD misuse? --YES--> Nonce reuse = key recovery; padding oracle = decrypt
-  |NO                        |
-  v                          v
-[3.6] IDOR/AuthZ bypass? --YES--> Access encrypted blobs, chain with crypto attacks
-  |NO                              |
-  v                                v
-[3.7] PubKey substitution? --YES--> Vault sharing attack
-  |NO                                |
-  v                                  v
-[3.8] XSS in web client? --YES--> Direct DOM exfiltration of decrypted note
+[3.1] SRP zero-key accepted? --YES--> Session key known → skip to [3.7]
   |NO
   v
-Re-evaluate. Check for:
-  - API version differences
-  - Race conditions
-  - Recovery group flows
-  - Cache/CDN poisoning of JS bundle
-  - New CVEs in dependencies
+[3.2] SRP timing leak? --YES--> Quantify; byte-at-a-time if d > 0.8
+  |NO                            (user enumeration, not direct key recovery)
+  v
+[3.3] KDF oracle leak? --YES--> Chain with [3.4] for offline cracking
+  |NO
+  v
+[3.4] Factor separation? --YES--> [3.10] Independent password crack
+  |NO                               (password-only: ~2^40 keyspace)
+  v
+[3.5] Recovery flow bypass? --YES--> Account takeover without 2SKD → [3.7]
+  |NO                                  (highest-value pre-auth vector)
+  v
+  +----- No pre-auth break -----+
+  |                              |
+  | Need a valid session         |
+  | (test account or Burp plugin)|
+  v                              |
+[3.6] Replay / MAC weakness? --YES--> Replay captured requests
+  |NO                                   across sessions
+  v
+[3.7] AEAD misuse? --YES--> Nonce reuse = key recovery
+  |NO                        Padding oracle = decrypt
+  v
+[3.8] IDOR / AuthZ bypass? --YES--> Access other account's
+  |NO                                 encrypted blobs → [3.7]
+  v
+[3.9] Client-side attack? --YES--> DOM exfiltration of
+  |NO                                decrypted note
+  v
+Re-evaluate:
+  - API version differences (v1 vs v2 access controls)
+  - Race conditions in vault sharing
+  - Session-restore key brute force
+  - CDN/cache poisoning of JS bundle
+  - New CVEs in lodash, WASM runtime, dependencies
+  - WASM Worker bypass of hash whitelist
 ```
 
 
